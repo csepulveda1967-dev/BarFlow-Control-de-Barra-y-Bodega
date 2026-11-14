@@ -247,7 +247,8 @@ CREATE INDEX IF NOT EXISTS idx_recetas_empresa ON recetas (empresa_id, activo);
 CREATE INDEX IF NOT EXISTS idx_vasos_empresa ON vasos (empresa_id, activo);
 CREATE INDEX IF NOT EXISTS idx_consumos_turno_empresa ON consumos_turno (empresa_id, fecha DESC, turno, id DESC);
 
--- Seguridad RLS (backend Express usa SUPABASE_SERVICE_ROLE_KEY)
+-- Seguridad RLS (backend Express usa SUPABASE_SERVICE_ROLE_KEY;
+-- modo directo en navegador usa Supabase Auth con rol authenticated, bloqueando anon)
 ALTER TABLE empresas ENABLE ROW LEVEL SECURITY;
 ALTER TABLE bodegas ENABLE ROW LEVEL SECURITY;
 ALTER TABLE proveedores ENABLE ROW LEVEL SECURITY;
@@ -265,6 +266,25 @@ ALTER TABLE receta_ingredientes ENABLE ROW LEVEL SECURITY;
 ALTER TABLE vasos ENABLE ROW LEVEL SECURITY;
 ALTER TABLE vasos_movimientos ENABLE ROW LEVEL SECURITY;
 ALTER TABLE consumos_turno ENABLE ROW LEVEL SECURITY;
+
+DO $$
+DECLARE
+  tbl TEXT;
+BEGIN
+  FOREACH tbl IN ARRAY ARRAY[
+    'empresas','bodegas','proveedores','categorias','productos','lotes',
+    'movimientos','solicitudes','cierres_turno','insumos','insumo_control_config',
+    'insumo_solicitudes','recetas','receta_ingredientes','vasos',
+    'vasos_movimientos','consumos_turno'
+  ]
+  LOOP
+    EXECUTE format('DROP POLICY IF EXISTS barflow_authenticated_all ON %I;', tbl);
+    EXECUTE format(
+      'CREATE POLICY barflow_authenticated_all ON %I FOR ALL TO authenticated USING (true) WITH CHECK (true);',
+      tbl
+    );
+  END LOOP;
+END $$;
 
 -- Datos base
 INSERT INTO empresas (id, nombre)

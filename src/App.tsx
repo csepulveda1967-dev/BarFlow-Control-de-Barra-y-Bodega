@@ -3,7 +3,10 @@ import {
   Boxes,
   ClipboardList,
   Download,
+  FolderArchive,
   GlassWater,
+  Loader2,
+  Lock,
   LogOut,
   Martini,
   Menu,
@@ -18,8 +21,10 @@ import {
 import type { AuthSession, EstadoApp, Producto } from './types';
 import {
   ApiError,
+  apiRequest,
   clearStoredSession,
   downloadExcelReport,
+  downloadProjectZipBackup,
   fetchEstado,
   getStoredSession,
   saveStoredSession,
@@ -46,6 +51,17 @@ type SectionId =
   | 'proveedores'
   | 'gerencia';
 
+const ADMIN_LOCK_KEY = 'barflow_admin_locked_v1';
+
+function readStoredAdminLock(activeSession: AuthSession | null): boolean {
+  if (!activeSession || activeSession.rol !== 'Gerencia') return false;
+  try {
+    return sessionStorage.getItem(ADMIN_LOCK_KEY) === activeSession.email;
+  } catch {
+    return false;
+  }
+}
+
 export default function App() {
   const [session, setSession] = useState<AuthSession | null>(() => getStoredSession());
   const [estado, setEstado] = useState<EstadoApp | null>(null);
@@ -55,6 +71,12 @@ export default function App() {
     getStoredSession()?.rol === 'Gerencia' ? 'gerencia' : 'inventario'
   );
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+
+  const [adminLocked, setAdminLocked] = useState<boolean>(() => readStoredAdminLock(getStoredSession()));
+  const [unlockPassword, setUnlockPassword] = useState('');
+  const [unlockError, setUnlockError] = useState<string | null>(null);
+  const [unlocking, setUnlocking] = useState(false);
+  const [downloadingZip, setDownloadingZip] = useState(false);
 
   const [selectedForSalida, setSelectedForSalida] = useState<Producto | null>(null);
   const [selectedForPedido, setSelectedForPedido] = useState<Producto | null>(null);
@@ -117,20 +139,99 @@ export default function App() {
   }, [session, loadData]);
 
   const handleLoginSuccess = (newSession: AuthSession) => {
+    try {
+      sessionStorage.removeItem(ADMIN_LOCK_KEY);
+    } catch {
+      // ignore storage errors
+    }
     saveStoredSession(newSession);
     setLoadError(null);
+    setAdminLocked(false);
+    setUnlockPassword('');
+    setUnlockError(null);
     setSession(newSession);
     setSection(newSession.rol === 'Gerencia' ? 'gerencia' : 'inventario');
   };
 
   const handleLogout = () => {
-    const logoutPath = session?.rol === 'Gerencia' ? '/gerencia' : '/barra';
+    const baseUrl = import.meta.env.BASE_URL || '/';
+    const modulo = session?.rol === 'Gerencia' ? 'gerencia' : 'barra';
+    const logoutPath = baseUrl !== '/' ? `${baseUrl}?modulo=${modulo}` : `/${modulo}`;
+    try {
+      sessionStorage.removeItem(ADMIN_LOCK_KEY);
+    } catch {
+      // ignore storage errors
+    }
     clearStoredSession();
     setSession(null);
     setEstado(null);
     setLoadError(null);
+    setAdminLocked(false);
+    setUnlockPassword('');
+    setUnlockError(null);
     setMobileMenuOpen(false);
     window.history.replaceState(null, '', logoutPath);
+  };
+
+  const handleLockAdmin = () => {
+    if (!session || session.rol !== 'Gerencia') return;
+    try {
+      sessionStorage.setItem(ADMIN_LOCK_KEY, session.email);
+    } catch {
+      // ignore storage errors
+    }
+    setAdminLocked(true);
+    setMobileMenuOpen(false);
+    setUnlockPassword('');
+    setUnlockError(null);
+  };
+
+  const handleUnlockAdmin = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!session) return;
+    if (!unlockPassword) {
+      setUnlockError('Ingresa la contraseña de Administrador');
+      return;
+    }
+    setUnlocking(true);
+    setUnlockError(null);
+    try {
+      const verified = await apiRequest<AuthSession>('/login', {
+        method: 'POST',
+        body: {
+          email: session.email,
+          password: unlockPassword,
+          modulo: 'gerencia',
+        },
+      });
+      saveStoredSession(verified);
+      setSession(verified);
+      try {
+        sessionStorage.removeItem(ADMIN_LOCK_KEY);
+      } catch {
+        // ignore storage errors
+      }
+      setAdminLocked(false);
+      setUnlockPassword('');
+      notify('Modo Administrador desbloqueado');
+    } catch (err) {
+      setUnlockError(err instanceof Error ? err.message : 'Contraseña incorrecta');
+    } finally {
+      setUnlocking(false);
+    }
+  };
+
+  const handleDownloadProjectZip = async () => {
+    if (!session || downloadingZip) return;
+    setDownloadingZip(true);
+    try {
+      await downloadProjectZipBackup(session.token);
+      notify('Respaldo completo (.zip) descargado en tu PC');
+    } catch (err) {
+      notify(err instanceof Error ? err.message : 'No se pudo generar el respaldo ZIP', true);
+    } finally {
+      setDownloadingZip(false);
+    }
   };
 
   const handleRefresh = async () => {
@@ -144,6 +245,80 @@ export default function App() {
   }
 
   const isGerencia = session.rol === 'Gerencia';
+
+  if (isGerencia && adminLocked) {
+    return (
+      <div className="min-h-screen bg-slate-950 flex items-center justify-center p-4 text-slate-900">
+        <div className="w-full max-w-md bg-white border border-slate-200 rounded-2xl p-6 sm:p-8 shadow-xl space-y-6">
+          <div className="flex items-start gap-3.5">
+            <div className="w-11 h-11 rounded-xl bg-slate-900 text-white flex items-center justify-center shrink-0">
+              <Lock className="w-5 h-5" />
+            </div>
+            <div className="min-w-0">
+              <h1 className="text-lg font-bold tracking-tight text-slate-900">
+                Modo Administrador Bloqueado
+              </h1>
+              <p className="text-xs text-slate-500 mt-1">
+                Pantalla protegida con candado. Ingresa la clave de Gerencia para continuar operando.
+              </p>
+            </div>
+          </div>
+
+          <div className="px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-lg">
+            <p className="text-[11px] font-medium text-slate-500">Cuenta bloqueada</p>
+            <p className="text-sm font-mono font-medium text-slate-900 truncate mt-0.5">{session.email}</p>
+          </div>
+
+          <form onSubmit={handleUnlockAdmin} className="space-y-4">
+            <div>
+              <label htmlFor="admin-unlock-password" className="block text-xs font-semibold text-slate-700 mb-1.5">
+                Contraseña de Gerencia
+              </label>
+              <input
+                id="admin-unlock-password"
+                type="password"
+                autoFocus
+                autoComplete="current-password"
+                value={unlockPassword}
+                onChange={(e) => {
+                  setUnlockPassword(e.target.value);
+                  if (unlockError) setUnlockError(null);
+                }}
+                placeholder="Ingresa tu contraseña"
+                className="w-full px-3.5 py-2.5 text-sm bg-white border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-slate-900 focus:border-slate-900"
+              />
+            </div>
+
+            {unlockError && (
+              <p role="alert" className="text-xs font-medium text-rose-700 bg-rose-50 border border-rose-200 rounded-lg px-3 py-2">
+                {unlockError}
+              </p>
+            )}
+
+            <div className="flex flex-col sm:flex-row gap-2.5 pt-1">
+              <button
+                type="submit"
+                disabled={unlocking}
+                className="flex-1 inline-flex items-center justify-center gap-2 px-4 py-2.5 text-xs font-semibold bg-slate-900 hover:bg-slate-800 disabled:opacity-60 text-white rounded-lg transition-colors whitespace-nowrap cursor-pointer"
+              >
+                {unlocking ? <Loader2 className="w-4 h-4 animate-spin" /> : <Lock className="w-4 h-4" />}
+                <span>{unlocking ? 'Verificando...' : 'Desbloquear Gerencia'}</span>
+              </button>
+              <button
+                type="button"
+                onClick={handleLogout}
+                className="inline-flex items-center justify-center gap-1.5 px-4 py-2.5 text-xs font-semibold bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg transition-colors whitespace-nowrap cursor-pointer"
+              >
+                <LogOut className="w-3.5 h-3.5" />
+                <span>Cerrar Sesión</span>
+              </button>
+            </div>
+          </form>
+        </div>
+      </div>
+    );
+  }
+
   const activeSection: SectionId =
     !isGerencia && (section === 'proveedores' || section === 'gerencia') ? 'inventario' : section;
 
@@ -330,13 +505,38 @@ export default function App() {
                 </button>
               ))}
             </nav>
-            <div className="p-4 border-t border-slate-200">
+            <div className="p-4 border-t border-slate-200 space-y-2">
               <p className="text-xs font-semibold text-slate-900 truncate">{session.nombre}</p>
-              <p className="text-xs text-slate-500 truncate mb-3">{session.email}</p>
+              <p className="text-xs text-slate-500 truncate mb-2">{session.email}</p>
+              {isGerencia && (
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    disabled={downloadingZip}
+                    onClick={handleDownloadProjectZip}
+                    className="flex items-center justify-center gap-1.5 px-2.5 py-2 text-xs font-semibold text-slate-800 bg-slate-100 hover:bg-slate-200 disabled:opacity-60 rounded-lg cursor-pointer"
+                  >
+                    {downloadingZip ? (
+                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    ) : (
+                      <FolderArchive className="w-3.5 h-3.5" />
+                    )}
+                    <span>Respaldo ZIP</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleLockAdmin}
+                    className="flex items-center justify-center gap-1.5 px-2.5 py-2 text-xs font-semibold text-amber-900 bg-amber-50 border border-amber-300 hover:bg-amber-100 rounded-lg cursor-pointer"
+                  >
+                    <Lock className="w-3.5 h-3.5" />
+                    <span>Candado</span>
+                  </button>
+                </div>
+              )}
               <button
                 type="button"
                 onClick={handleLogout}
-                className="w-full py-2 text-xs font-semibold text-slate-700 bg-slate-100 rounded-lg"
+                className="w-full py-2 text-xs font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg cursor-pointer"
               >
                 Cerrar Sesión
               </button>
@@ -347,7 +547,7 @@ export default function App() {
 
       {/* Main Content Workspace */}
       <div className="flex-1 flex flex-col min-w-0">
-        <header className="h-16 bg-white border-b border-slate-200 px-4 sm:px-6 flex items-center justify-between gap-6 shrink-0">
+        <header className="h-16 bg-white border-b border-slate-200 px-4 sm:px-6 flex items-center justify-between gap-4 shrink-0">
           <div className="flex items-center gap-3 min-w-0">
             <button
               type="button"
@@ -362,26 +562,55 @@ export default function App() {
             </h1>
           </div>
 
-          <div className="hidden md:flex items-center gap-4 text-xs text-slate-500 whitespace-nowrap shrink-0">
+          <div className="hidden xl:flex items-center gap-4 text-xs text-slate-500 whitespace-nowrap shrink-0">
             <span>Control Comercial de Barra</span>
             <span aria-hidden="true">·</span>
             <span>Rol: {session.rol}</span>
           </div>
 
-          <div className="shrink-0">
+          <div className="flex items-center gap-2 shrink-0">
             {isGerencia ? (
-              <button
-                type="button"
-                onClick={() =>
-                  downloadExcelReport(session.token).catch((e) =>
-                    notify(e instanceof Error ? e.message : 'Error descargando Excel', true)
-                  )
-                }
-                className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold bg-slate-900 hover:bg-slate-800 text-white rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer"
-              >
-                <Download className="w-3.5 h-3.5" />
-                <span>Exportar Excel</span>
-              </button>
+              <>
+                <button
+                  type="button"
+                  disabled={downloadingZip}
+                  onClick={handleDownloadProjectZip}
+                  title="Descargar proyecto completo y respaldo de datos en ZIP"
+                  className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-semibold bg-white hover:bg-slate-100 disabled:opacity-60 text-slate-800 border border-slate-300 rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+                >
+                  {downloadingZip ? (
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                  ) : (
+                    <FolderArchive className="w-3.5 h-3.5" />
+                  )}
+                  <span className="hidden sm:inline">
+                    {downloadingZip ? 'Empaquetando...' : 'Respaldo ZIP'}
+                  </span>
+                  <span className="sm:hidden">ZIP</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={handleLockAdmin}
+                  title="Bloquear aplicación en modo Administrador con candado"
+                  className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-semibold bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-300 rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+                >
+                  <Lock className="w-3.5 h-3.5" />
+                  <span className="hidden sm:inline">Candado Adm.</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() =>
+                    downloadExcelReport(session.token).catch((e) =>
+                      notify(e instanceof Error ? e.message : 'Error descargando Excel', true)
+                    )
+                  }
+                  className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold bg-slate-900 hover:bg-slate-800 text-white rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+                >
+                  <Download className="w-3.5 h-3.5" />
+                  <span className="hidden sm:inline">Exportar Excel</span>
+                  <span className="sm:hidden">Excel</span>
+                </button>
+              </>
             ) : (
               <button
                 type="button"

@@ -67,6 +67,14 @@ export const LoginView: React.FC<LoginViewProps> = ({ onSuccess }) => {
     setError('');
     setEmail('');
     setPassword('');
+    const baseUrl = import.meta.env.BASE_URL || '/';
+    if (baseUrl !== '/') {
+      const nextUrl = next === 'portal' ? baseUrl : `${baseUrl}?modulo=${next}`;
+      if (`${window.location.pathname}${window.location.search}` !== nextUrl) {
+        window.history.pushState(null, '', nextUrl);
+      }
+      return;
+    }
     const nextPath = next === 'portal' ? '/' : next === 'barra' ? '/barra' : '/gerencia';
     if (window.location.pathname !== nextPath || window.location.search) {
       window.history.pushState(null, '', nextPath);

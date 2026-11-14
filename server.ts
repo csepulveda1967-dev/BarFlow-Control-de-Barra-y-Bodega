@@ -2,9 +2,12 @@ import 'dotenv/config';
 import express, { Request, Response, NextFunction } from 'express';
 import jwt from 'jsonwebtoken';
 import ExcelJS from 'exceljs';
+import JSZip from 'jszip';
+import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createServer as createViteServer } from 'vite';
+import { buildBackupReadmeText } from './src/lib/backupReadme.ts';
 import {
   createRepository,
   DEFAULT_INSUMO_CONTROL,
@@ -563,6 +566,28 @@ function adminOnly(req: AuthedRequest, res: Response, next: NextFunction): void 
 const app = express();
 app.disable('x-powered-by');
 app.use(express.json({ limit: '4mb' }));
+
+const ALLOWED_ORIGINS = String(process.env.CORS_ORIGIN || '')
+  .split(',')
+  .map((o) => o.trim())
+  .filter(Boolean);
+
+if (ALLOWED_ORIGINS.length > 0) {
+  app.use((req, res, next) => {
+    const origin = req.headers.origin;
+    if (origin && (ALLOWED_ORIGINS.includes('*') || ALLOWED_ORIGINS.includes(origin))) {
+      res.setHeader('Access-Control-Allow-Origin', origin);
+      res.setHeader('Vary', 'Origin');
+      res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PUT,PATCH,DELETE,OPTIONS');
+      res.setHeader('Access-Control-Allow-Headers', 'Content-Type,Authorization');
+    }
+    if (req.method === 'OPTIONS') {
+      res.sendStatus(204);
+      return;
+    }
+    next();
+  });
+}
 
 app.get('/api/health', (_req, res) => {
   res.json({ ok: true, mode: repo.mode });
@@ -2978,6 +3003,67 @@ app.get(
     res.setHeader('Content-Disposition', `attachment; filename="Reporte_Gerencial_Bar_${todayDate()}.xlsx"`);
     const buf = await wb.xlsx.writeBuffer();
     res.end(Buffer.from(buf));
+  })
+);
+
+// ============================================================================
+// RESPALDO COMPLETO DEL PROYECTO (.ZIP) + DATOS VIGENTES (SOLO GERENCIA)
+// ============================================================================
+
+const BACKUP_SKIP_DIRS = new Set(['node_modules', '.git', 'dist', '.aistudio']);
+const BACKUP_SKIP_FILES = new Set(['barflow_local_data.json', 'bar_control.db', '.DS_Store', 'Thumbs.db']);
+
+function addProjectDirectoryToZip(zip: JSZip, rootDir: string, currentDir: string) {
+  const entries = fs.readdirSync(currentDir, { withFileTypes: true });
+  for (const entry of entries) {
+    const name = entry.name;
+    if (entry.isDirectory()) {
+      if (BACKUP_SKIP_DIRS.has(name)) continue;
+      addProjectDirectoryToZip(zip, rootDir, path.join(currentDir, name));
+      continue;
+    }
+    if (!entry.isFile()) continue;
+    if (BACKUP_SKIP_FILES.has(name) || name.endsWith('.zip')) continue;
+    if (name === '.env' || (name.startsWith('.env.') && name !== '.env.example')) continue;
+
+    const fullPath = path.join(currentDir, name);
+    const relPath = path.relative(rootDir, fullPath).split(path.sep).join('/');
+    zip.file(relPath, fs.readFileSync(fullPath));
+  }
+}
+
+app.get(
+  '/api/respaldo/proyecto.zip',
+  auth,
+  adminOnly,
+  wrap(async (_req, res) => {
+    const zip = new JSZip();
+    addProjectDirectoryToZip(zip, __dirname, __dirname);
+
+    const snapshot = await repo.getSnapshot(EMPRESA_ID);
+    const exportedAt = nowISO();
+    const backupPayload = {
+      exported_at: exportedAt,
+      empresa_id: EMPRESA_ID,
+      mode: repo.mode,
+      snapshot,
+    };
+
+    zip.file('RESPALDO_DATOS_BARFLOW.json', JSON.stringify(backupPayload, null, 2));
+    zip.file('LEEME_RESPALDO_PC.txt', buildBackupReadmeText(`servidor-${repo.mode}`, exportedAt));
+
+    const zipBuffer = await zip.generateAsync({
+      type: 'nodebuffer',
+      compression: 'DEFLATE',
+      compressionOptions: { level: 6 },
+    });
+
+    res.setHeader('Content-Type', 'application/zip');
+    res.setHeader(
+      'Content-Disposition',
+      `attachment; filename="BarFlow_Proyecto_Completo_${todayDate()}.zip"`
+    );
+    res.end(zipBuffer);
   })
 );
 

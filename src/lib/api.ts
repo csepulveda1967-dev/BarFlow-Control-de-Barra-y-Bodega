@@ -1,14 +1,46 @@
 import type { AuthSession, EstadoApp } from '../types';
+import { ApiError } from './apiError';
+import {
+  browserDownloadExcelReport,
+  browserDownloadImportTemplate,
+  browserDownloadProjectZip,
+  handleBrowserApiRequest,
+  signOutBrowserClient,
+} from './browserClient';
+
+export { ApiError };
 
 const SESSION_KEY = 'barflow_session_v1';
+const API_BASE = String((import.meta as { env?: Record<string, string | undefined> }).env?.VITE_API_BASE || '').replace(/\/$/, '');
 
-export class ApiError extends Error {
-  status: number;
-  constructor(message: string, status: number) {
-    super(message);
-    this.name = 'ApiError';
-    this.status = status;
+let backendAvailablePromise: Promise<boolean> | null = null;
+
+async function hasBackendServer(): Promise<boolean> {
+  if (API_BASE) return true;
+  if (typeof window !== 'undefined' && window.location.hostname.endsWith('.github.io')) {
+    return false;
   }
+  if (!backendAvailablePromise) {
+    backendAvailablePromise = (async () => {
+      try {
+        const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+        const timer = controller ? setTimeout(() => controller.abort(), 1800) : null;
+        const res = await fetch('/api/health', {
+          cache: 'no-store',
+          signal: controller?.signal,
+        });
+        if (timer) clearTimeout(timer);
+        if (!res.ok) return false;
+        const ct = res.headers.get('content-type') || '';
+        if (!ct.toLowerCase().includes('application/json')) return false;
+        const data = (await res.json().catch(() => null)) as { ok?: boolean } | null;
+        return Boolean(data?.ok);
+      } catch {
+        return false;
+      }
+    })();
+  }
+  return backendAvailablePromise;
 }
 
 export function getStoredSession(): AuthSession | null {
@@ -43,12 +75,18 @@ export function saveStoredSession(session: AuthSession): void {
 
 export function clearStoredSession(): void {
   sessionStorage.removeItem(SESSION_KEY);
+  void signOutBrowserClient();
 }
 
 export async function apiRequest<T>(
   route: string,
   options: { method?: string; body?: unknown; token?: string } = {}
 ): Promise<T> {
+  const backendAvailable = await hasBackendServer();
+  if (!backendAvailable || options.token?.startsWith('local:')) {
+    return handleBrowserApiRequest<T>(route, options);
+  }
+
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
   };
@@ -56,7 +94,7 @@ export async function apiRequest<T>(
     headers.Authorization = `Bearer ${options.token}`;
   }
 
-  const res = await fetch(`/api${route}`, {
+  const res = await fetch(`${API_BASE}/api${route}`, {
     method: options.method || 'GET',
     headers,
     body: options.body !== undefined ? JSON.stringify(options.body) : undefined,
@@ -74,7 +112,13 @@ export async function fetchEstado(token: string): Promise<EstadoApp> {
 }
 
 export async function downloadExcelReport(token: string): Promise<void> {
-  const res = await fetch('/api/exportar/reporte-gerencial.xlsx', {
+  const backendAvailable = await hasBackendServer();
+  if (!backendAvailable || token.startsWith('local:')) {
+    await browserDownloadExcelReport(token);
+    return;
+  }
+
+  const res = await fetch(`${API_BASE}/api/exportar/reporte-gerencial.xlsx`, {
     headers: { Authorization: `Bearer ${token}` },
   });
   if (!res.ok) {
@@ -93,7 +137,13 @@ export async function downloadExcelReport(token: string): Promise<void> {
 }
 
 export async function downloadImportTemplate(token: string): Promise<void> {
-  const res = await fetch('/api/productos/plantilla.xlsx', {
+  const backendAvailable = await hasBackendServer();
+  if (!backendAvailable || token.startsWith('local:')) {
+    await browserDownloadImportTemplate(token);
+    return;
+  }
+
+  const res = await fetch(`${API_BASE}/api/productos/plantilla.xlsx`, {
     headers: { Authorization: `Bearer ${token}` },
   });
   if (!res.ok) {
@@ -105,6 +155,31 @@ export async function downloadImportTemplate(token: string): Promise<void> {
   const a = document.createElement('a');
   a.href = url;
   a.download = 'Plantilla_Carga_Productos_BarFlow.xlsx';
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 60000);
+}
+
+export async function downloadProjectZipBackup(token: string): Promise<void> {
+  const backendAvailable = await hasBackendServer();
+  if (!backendAvailable || token.startsWith('local:')) {
+    await browserDownloadProjectZip(token);
+    return;
+  }
+
+  const res = await fetch(`${API_BASE}/api/respaldo/proyecto.zip`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new ApiError(err.error || 'No se pudo generar el respaldo ZIP del proyecto', res.status);
+  }
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `BarFlow_Proyecto_Completo_${new Date().toISOString().slice(0, 10)}.zip`;
   document.body.appendChild(a);
   a.click();
   a.remove();
