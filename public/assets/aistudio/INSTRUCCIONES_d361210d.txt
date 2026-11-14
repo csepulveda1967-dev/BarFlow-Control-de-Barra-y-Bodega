@@ -1,0 +1,18 @@
+ACTUALIZACIÓN: EXPORTAR INVENTARIO A EXCEL (.xlsx)
+
+1. Detén la aplicación con Ctrl+C en la ventana negra.
+2. Abre la carpeta del ZIP llamada piloto_bar_turso.
+3. Copia los TRES elementos que hay dentro: server.js, package.json y la carpeta public.
+4. Pégalos DIRECTAMENTE dentro de tu carpeta original:
+   C:\Users\NIÑOS\Documents\proyecto asesorias\app resto cocina gpt\piloto_bar_turso
+   Acepta reemplazar los archivos.
+   IMPORTANTE: No pegues la carpeta piloto_bar_turso dentro de otra piloto_bar_turso.
+5. En la carpeta principal del proyecto, abre PowerShell o CMD y ejecuta:
+   npm install
+   npm start
+6. Abre http://localhost:3000, inicia sesión como Gerencia y actualiza con Ctrl+F5.
+7. En Gerencia, pulsa "Exportar Excel (.xlsx)".
+
+No borres ni modifiques .env. No es necesario ejecutar SQL.
+El botón es solo para Gerencia. Exporta inventario de Bar, no todas las bodegas.
+El valor del stock es referencial (existencias por costo de referencia).

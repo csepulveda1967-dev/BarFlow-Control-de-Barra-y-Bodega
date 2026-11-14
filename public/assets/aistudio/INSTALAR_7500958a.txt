@@ -1,0 +1,4 @@
+1. Detener npm start con Ctrl+C.
+2. Copiar server.js y public\index.html en carpeta principal.
+3. No tocar .env ni RESPALDO_PROYECTO_ANTERIOR.
+4. npm start y Ctrl+F5.

@@ -1,0 +1,6 @@
+{
+  "name": "BarFlow — Control de Barra y Bodega",
+  "description": "Sistema integral de control de inventario, turnos diarios, solicitudes por lotes FEFO/FIFO y auditoría gerencial para barra de restaurante y centro de eventos.",
+  "requestFramePermissions": [],
+  "majorCapabilities": []
+}

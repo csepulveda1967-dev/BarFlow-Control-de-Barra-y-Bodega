@@ -1,0 +1,101 @@
+import type { AuthSession, EstadoApp } from '../types';
+
+const SESSION_KEY = 'barflow_session_v1';
+
+export function getStoredSession(): AuthSession | null {
+  try {
+    const raw = sessionStorage.getItem(SESSION_KEY);
+    if (!raw) return null;
+    return JSON.parse(raw) as AuthSession;
+  } catch {
+    return null;
+  }
+}
+
+export function saveStoredSession(session: AuthSession): void {
+  sessionStorage.setItem(SESSION_KEY, JSON.stringify(session));
+}
+
+export function clearStoredSession(): void {
+  sessionStorage.removeItem(SESSION_KEY);
+}
+
+export async function apiRequest<T>(
+  route: string,
+  options: { method?: string; body?: unknown; token?: string } = {}
+): Promise<T> {
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+  };
+  if (options.token) {
+    headers.Authorization = `Bearer ${options.token}`;
+  }
+
+  const res = await fetch(`/api${route}`, {
+    method: options.method || 'GET',
+    headers,
+    body: options.body !== undefined ? JSON.stringify(options.body) : undefined,
+  });
+
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error(data.error || 'Error de comunicación con el servidor');
+  }
+  return data as T;
+}
+
+export async function fetchEstado(token: string): Promise<EstadoApp> {
+  return apiRequest<EstadoApp>('/estado', { token });
+}
+
+export async function downloadExcelReport(token: string): Promise<void> {
+  const res = await fetch('/api/exportar/reporte-gerencial.xlsx', {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || 'No se pudo generar el reporte Excel');
+  }
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `Reporte_Gerencial_Bar_${new Date().toISOString().slice(0, 10)}.xlsx`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 60000);
+}
+
+export async function downloadImportTemplate(token: string): Promise<void> {
+  const res = await fetch('/api/productos/plantilla.xlsx', {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || 'No se pudo descargar la plantilla Excel');
+  }
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'Plantilla_Carga_Productos_BarFlow.xlsx';
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 60000);
+}
+
+export function buildWhatsAppUrl(phone: string, message: string): string {
+  const cleanDigits = String(phone || '').replace(/[^\d]/g, '');
+  const encoded = encodeURIComponent(message);
+  return `https://wa.me/${cleanDigits}?text=${encoded}`;
+}
+
+export function fmtQty(val: number | null | undefined): string {
+  return Number(val || 0).toLocaleString('es-CL', { maximumFractionDigits: 3 });
+}
+
+export function fmtCLP(val: number | null | undefined): string {
+  return '$' + Math.round(Number(val || 0)).toLocaleString('es-CL');
+}

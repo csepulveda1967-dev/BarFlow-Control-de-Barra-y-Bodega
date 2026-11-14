@@ -1,0 +1,23 @@
+PILOTO BAR + GERENCIA CON TURSO (RAMA DE PRUEBAS)
+
+Este es un piloto operativo nuevo basado en las tablas Turso ya creadas; incluye los HTML originales sin modificar como referencia. No es aún la adaptación integral de sus pantallas ni una versión comercial multiempresa.
+
+1. Extraiga el ZIP en su computador.
+2. Abra PowerShell dentro de la carpeta piloto_bar_turso.
+3. Ejecute: npm install
+4. Copie .env.example a .env y rellene valores de conexión y credenciales NUEVAS. No comparta .env ni lo suba a GitHub.
+5. Ejecute: npm start
+6. Abra http://localhost:3000 en su computador.
+7. Ingrese como administrador con ADMIN_EMAIL/ADMIN_PASSWORD para crear productos y registrar ingresos.
+8. Ingrese como bartender con BAR_EMAIL/BAR_PASSWORD para registrar salidas, mermas y pedidos.
+9. Gerencia puede aprobar pedidos. La aprobación NO descuenta stock de Bodega Central ni efectúa traspasos; esa funcionalidad se desarrollará posteriormente.
+
+NOTAS
+- La URL está restringida deliberadamente a la rama pruebas-migracion-productos.
+- No requiere ejecutar la migración de productos: utiliza la tabla productos original existente.
+- No ejecuta CREATE/DROP TABLE en Turso.
+- El control de existencias utiliza lotes en bodega 3 (Bar). Las salidas se rebajan por fecha de vencimiento primero y fecha de ingreso después.
+- La vista Cocina y los procesos de apertura/cierre, recetas y transferencias quedan para la siguiente iteración.
+- Se requiere que empresa 1 y bodegas 1/2/3 existan, como en el respaldo.
+- Para acceder desde el teléfono en la misma red se requiere iniciar el servidor en el computador y usar la IP local del computador; no exponer el puerto a Internet. Para producción será necesario desplegar HTTPS y reforzar autenticación y autorización multiempresa.
+- Si el token compartido en el chat sigue activo, revóquelo y use uno nuevo.
