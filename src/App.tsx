@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Boxes,
   ClipboardList,
@@ -17,6 +17,7 @@ import {
 } from 'lucide-react';
 import type { AuthSession, EstadoApp, Producto } from './types';
 import {
+  ApiError,
   clearStoredSession,
   downloadExcelReport,
   fetchEstado,
@@ -49,6 +50,7 @@ export default function App() {
   const [session, setSession] = useState<AuthSession | null>(() => getStoredSession());
   const [estado, setEstado] = useState<EstadoApp | null>(null);
   const [loading, setLoading] = useState<boolean>(Boolean(session));
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [section, setSection] = useState<SectionId>(() =>
     getStoredSession()?.rol === 'Gerencia' ? 'gerencia' : 'inventario'
   );
@@ -58,26 +60,46 @@ export default function App() {
   const [selectedForPedido, setSelectedForPedido] = useState<Producto | null>(null);
 
   const [toast, setToast] = useState<{ msg: string; isError?: boolean } | null>(null);
+  const toastTimerRef = useRef<number | null>(null);
 
   const notify = useCallback((msg: string, isError = false) => {
     setToast({ msg, isError });
-    setTimeout(() => {
-      setToast((curr) => (curr?.msg === msg ? null : curr));
+    if (toastTimerRef.current !== null) {
+      window.clearTimeout(toastTimerRef.current);
+    }
+    toastTimerRef.current = window.setTimeout(() => {
+      setToast(null);
+      toastTimerRef.current = null;
     }, 3800);
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (toastTimerRef.current !== null) {
+        window.clearTimeout(toastTimerRef.current);
+      }
+    };
   }, []);
 
   const loadData = useCallback(
     async (activeSession: AuthSession) => {
+      setLoadError(null);
       try {
         const data = await fetchEstado(activeSession.token);
         setEstado(data);
       } catch (err) {
         const message = err instanceof Error ? err.message : 'Error cargando datos';
-        if (message.toLowerCase().includes('sesión') || message.toLowerCase().includes('expirada')) {
+        const isAuthFailure =
+          (err instanceof ApiError && err.status === 401) ||
+          message.toLowerCase().includes('sesión') ||
+          message.toLowerCase().includes('expirada');
+        if (isAuthFailure) {
           clearStoredSession();
           setSession(null);
           setEstado(null);
+          setLoadError(null);
         } else {
+          setLoadError(message);
           notify(message, true);
         }
       } finally {
@@ -96,6 +118,7 @@ export default function App() {
 
   const handleLoginSuccess = (newSession: AuthSession) => {
     saveStoredSession(newSession);
+    setLoadError(null);
     setSession(newSession);
     setSection(newSession.rol === 'Gerencia' ? 'gerencia' : 'inventario');
   };
@@ -105,12 +128,14 @@ export default function App() {
     clearStoredSession();
     setSession(null);
     setEstado(null);
+    setLoadError(null);
     setMobileMenuOpen(false);
     window.history.replaceState(null, '', logoutPath);
   };
 
   const handleRefresh = async () => {
     if (!session) return;
+    setLoading(true);
     await loadData(session);
   };
 
@@ -119,6 +144,8 @@ export default function App() {
   }
 
   const isGerencia = session.rol === 'Gerencia';
+  const activeSection: SectionId =
+    !isGerencia && (section === 'proveedores' || section === 'gerencia') ? 'inventario' : section;
 
   const navItems: Array<{
     id: SectionId;
@@ -208,7 +235,7 @@ export default function App() {
 
         <nav className="flex-1 p-3.5 space-y-1 overflow-y-auto">
           {navItems.map((item) => {
-            const active = section === item.id;
+            const active = activeSection === item.id;
             return (
               <button
                 key={item.id}
@@ -283,10 +310,12 @@ export default function App() {
                   type="button"
                   onClick={() => {
                     setSection(item.id);
+                    setSelectedForSalida(null);
+                    setSelectedForPedido(null);
                     setMobileMenuOpen(false);
                   }}
                   className={`w-full flex items-center justify-between gap-2 px-3 py-2.5 rounded-lg text-sm font-medium ${
-                    section === item.id
+                    activeSection === item.id
                       ? 'bg-slate-900 text-white'
                       : 'text-slate-700 hover:bg-slate-100'
                   }`}
@@ -329,7 +358,7 @@ export default function App() {
               <Menu className="w-5 h-5" />
             </button>
             <h1 className="text-base sm:text-lg font-semibold text-slate-900 truncate">
-              {sectionTitles[section]}
+              {sectionTitles[activeSection]}
             </h1>
           </div>
 
@@ -367,7 +396,30 @@ export default function App() {
         </header>
 
         <main className="flex-1 p-4 sm:p-6 max-w-7xl w-full mx-auto">
-          {loading || !estado ? (
+          {loadError && !estado ? (
+            <div className="bg-white border border-rose-200 rounded-xl p-6 max-w-lg mx-auto my-8 space-y-4">
+              <div>
+                <h2 className="text-base font-bold text-slate-900">No se pudo cargar el estado de Barra</h2>
+                <p className="text-sm text-rose-700 mt-1">{loadError}</p>
+              </div>
+              <div className="flex items-center gap-3">
+                <button
+                  type="button"
+                  onClick={handleRefresh}
+                  className="px-4 py-2 text-xs font-semibold bg-slate-900 hover:bg-slate-800 text-white rounded-lg cursor-pointer"
+                >
+                  Reintentar
+                </button>
+                <button
+                  type="button"
+                  onClick={handleLogout}
+                  className="px-4 py-2 text-xs font-semibold bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg cursor-pointer"
+                >
+                  Cerrar Sesión
+                </button>
+              </div>
+            </div>
+          ) : loading || !estado ? (
             <div className="space-y-4">
               <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
                 {[1, 2, 3, 4].map((i) => (
@@ -378,7 +430,7 @@ export default function App() {
             </div>
           ) : (
             <>
-              {section === 'inventario' && (
+              {activeSection === 'inventario' && (
                 <InventarioView
                   estado={estado}
                   onQuickSalida={(p) => {
@@ -392,7 +444,7 @@ export default function App() {
                 />
               )}
 
-              {section === 'turno' && (
+              {activeSection === 'turno' && (
                 <TurnoDiarioView
                   token={session.token}
                   estado={estado}
@@ -402,7 +454,7 @@ export default function App() {
                 />
               )}
 
-              {section === 'solicitudes' && (
+              {activeSection === 'solicitudes' && (
                 <SolicitudPedidosView
                   token={session.token}
                   estado={estado}
@@ -412,7 +464,7 @@ export default function App() {
                 />
               )}
 
-              {section === 'recepcion' && (
+              {activeSection === 'recepcion' && (
                 <RecepcionBodegaView
                   token={session.token}
                   estado={estado}
@@ -421,7 +473,7 @@ export default function App() {
                 />
               )}
 
-              {section === 'cocteles' && (
+              {activeSection === 'cocteles' && (
                 <CoctelesView
                   token={session.token}
                   estado={estado}
@@ -430,7 +482,7 @@ export default function App() {
                 />
               )}
 
-              {section === 'vasos' && (
+              {activeSection === 'vasos' && (
                 <VasosView
                   token={session.token}
                   estado={estado}
@@ -439,7 +491,7 @@ export default function App() {
                 />
               )}
 
-              {section === 'insumos' && (
+              {activeSection === 'insumos' && (
                 <InsumosView
                   token={session.token}
                   estado={estado}
@@ -448,7 +500,7 @@ export default function App() {
                 />
               )}
 
-              {section === 'proveedores' && isGerencia && (
+              {activeSection === 'proveedores' && isGerencia && (
                 <ProveedoresView
                   token={session.token}
                   estado={estado}
@@ -457,7 +509,7 @@ export default function App() {
                 />
               )}
 
-              {section === 'gerencia' && isGerencia && (
+              {activeSection === 'gerencia' && isGerencia && (
                 <GerenciaView
                   token={session.token}
                   estado={estado}

@@ -2,11 +2,36 @@ import type { AuthSession, EstadoApp } from '../types';
 
 const SESSION_KEY = 'barflow_session_v1';
 
+export class ApiError extends Error {
+  status: number;
+  constructor(message: string, status: number) {
+    super(message);
+    this.name = 'ApiError';
+    this.status = status;
+  }
+}
+
 export function getStoredSession(): AuthSession | null {
   try {
     const raw = sessionStorage.getItem(SESSION_KEY);
     if (!raw) return null;
-    return JSON.parse(raw) as AuthSession;
+    const parsed = JSON.parse(raw) as Partial<AuthSession> | null;
+    if (
+      !parsed ||
+      typeof parsed.token !== 'string' ||
+      !parsed.token ||
+      (parsed.rol !== 'Gerencia' && parsed.rol !== 'Bar') ||
+      typeof parsed.email !== 'string'
+    ) {
+      sessionStorage.removeItem(SESSION_KEY);
+      return null;
+    }
+    return {
+      token: parsed.token,
+      rol: parsed.rol,
+      email: parsed.email,
+      nombre: typeof parsed.nombre === 'string' && parsed.nombre ? parsed.nombre : parsed.rol,
+    };
   } catch {
     return null;
   }
@@ -39,7 +64,7 @@ export async function apiRequest<T>(
 
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
-    throw new Error(data.error || 'Error de comunicación con el servidor');
+    throw new ApiError(data.error || 'Error de comunicación con el servidor', res.status);
   }
   return data as T;
 }
