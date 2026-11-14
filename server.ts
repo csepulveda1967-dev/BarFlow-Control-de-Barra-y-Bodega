@@ -5,7 +5,14 @@ import ExcelJS from 'exceljs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createServer as createViteServer } from 'vite';
-import { createRepository, formatDisplayTS, nowISO, type DbProducto } from './src/db/repository.ts';
+import {
+  createRepository,
+  DEFAULT_INSUMO_CONTROL,
+  DEFAULT_SEED_CATEGORIES,
+  formatDisplayTS,
+  nowISO,
+  type DbProducto,
+} from './src/db/repository.ts';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -35,7 +42,7 @@ interface AuthedRequest extends Request {
 }
 
 const VALID_UNITS = ['unidad', 'botella', 'lata', 'ml', 'L', 'barril', 'caja'];
-const VALID_CATEGORIES = ['Whisky', 'Piscos', 'Cervezas', 'Otros Licores', 'Gaseosas', 'Jugos'];
+const VALID_CATEGORIES = DEFAULT_SEED_CATEGORIES;
 const VALID_ENVASES = ['botella', 'lata', 'bidón', 'barril', 'caja', 'otro'];
 const VALID_CONTENIDO_UNITS = ['ml', 'L'];
 const VALID_TURNOS = ['AM', 'PM'] as const;
@@ -54,17 +61,14 @@ function nnonneg(v: unknown): number | null {
   return Number.isFinite(n) && n >= 0 ? Math.round(n * 10000) / 10000 : null;
 }
 
-function normalizeCategory(raw: unknown): string {
+function normalizeCategory(raw: unknown, fallback = 'Otros Licores'): string {
   const txt = String(raw || '').trim();
+  if (!txt) return fallback;
   const found = VALID_CATEGORIES.find((c) => c.toLowerCase() === txt.toLowerCase());
   if (found) return found;
   const low = txt.toLowerCase();
-  if (low.includes('whi') || low.includes('wik')) return 'Whisky';
-  if (low.includes('pis')) return 'Piscos';
-  if (low.includes('cerv') || low.includes('beer')) return 'Cervezas';
-  if (low.includes('gas') || low.includes('bebida') || low.includes('tón') || low.includes('ton')) return 'Gaseosas';
-  if (low.includes('jug')) return 'Jugos';
-  return 'Otros Licores';
+  if (low === 'wisky' || low === 'wiksky' || low === 'whiskey') return 'Whisky';
+  return txt;
 }
 
 /** Convierte una cantidad de ingrediente (ml, L, corto, coctel, unidad) a fracción de unidad de stock del producto */
@@ -311,6 +315,8 @@ async function buildEstado(isGerencia: boolean) {
       id: ins.id,
       codigo: ins.codigo,
       nombre: ins.nombre,
+      categoria: ins.categoria || 'Insumos de Barra',
+      criterio: ins.criterio ?? null,
       unidad: ins.unidad,
       stock_actual: Number(ins.stock_actual || 0),
       stock_minimo: Number(ins.stock_minimo || 0),
@@ -318,9 +324,48 @@ async function buildEstado(isGerencia: boolean) {
       proveedor_id: ins.proveedor_id,
       proveedor_nombre: prov?.nombre || null,
       proveedor_wsp: prov?.telefono_wsp || null,
+      solicitable_por_bar: ins.solicitable_por_bar ?? true,
+      max_por_solicitud: ins.max_por_solicitud != null ? Number(ins.max_por_solicitud) : null,
       notas: ins.notas,
     };
   });
+
+  const insumoControl = snap.insumoControl || {
+    empresa_id: EMPRESA_ID,
+    ...DEFAULT_INSUMO_CONTROL,
+  };
+
+  const solicitudesInsumos = (snap.solicitudesInsumos || []).map((si) => {
+    const prov = si.proveedor_id ? provMap.get(si.proveedor_id) : null;
+    return {
+      id: si.id,
+      fecha: formatDisplayTS(si.fecha),
+      insumo_id: si.insumo_id,
+      nombre_item: si.nombre_item,
+      categoria: si.categoria || 'Insumos de Barra',
+      unidad: si.unidad,
+      cantidad_solicitada: Number(si.cantidad_solicitada),
+      criterio: si.criterio,
+      proveedor_id: si.proveedor_id,
+      proveedor_nombre: prov?.nombre || null,
+      proveedor_wsp: prov?.telefono_wsp || null,
+      estado: si.estado,
+      solicitante: si.solicitante,
+      observacion: si.observacion,
+    };
+  });
+
+  const catSet = new Set<string>(DEFAULT_SEED_CATEGORIES);
+  for (const c of snap.categorias || []) {
+    if (c.nombre) catSet.add(c.nombre);
+  }
+  for (const p of productos) {
+    if (p.categoria) catSet.add(p.categoria);
+  }
+  for (const ins of insumos) {
+    if (ins.categoria) catSet.add(ins.categoria);
+  }
+  const categorias = Array.from(catSet).sort((a, b) => a.localeCompare(b, 'es'));
 
   const recetas = snap.recetas.map((rec) => {
     const rawIngs = snap.recetaIngredientes.filter((ri) => ri.receta_id === rec.id && prodMap.has(ri.producto_id));
@@ -447,6 +492,7 @@ async function buildEstado(isGerencia: boolean) {
   }));
 
   return {
+    categorias,
     productos,
     solicitudes,
     movimientos,
@@ -454,6 +500,22 @@ async function buildEstado(isGerencia: boolean) {
     lotes,
     proveedores,
     insumos,
+    insumoControl: {
+      permitir_crear_items_bar: Boolean(insumoControl.permitir_crear_items_bar),
+      restringir_categorias_bar: Boolean(insumoControl.restringir_categorias_bar),
+      categorias_permitidas_bar: Array.isArray(insumoControl.categorias_permitidas_bar)
+        ? insumoControl.categorias_permitidas_bar
+        : [],
+      solo_bajo_minimo: Boolean(insumoControl.solo_bajo_minimo),
+      bloquear_duplicados_pendientes: Boolean(insumoControl.bloquear_duplicados_pendientes),
+      max_items_por_solicitud:
+        insumoControl.max_items_por_solicitud != null ? Number(insumoControl.max_items_por_solicitud) : null,
+      permitir_criterio_personalizado_bar: Boolean(insumoControl.permitir_criterio_personalizado_bar),
+      criterios_permitidos_bar: Array.isArray(insumoControl.criterios_permitidos_bar)
+        ? insumoControl.criterios_permitidos_bar
+        : [],
+    },
+    solicitudesInsumos,
     recetas,
     consumosTurno,
     vasos,
@@ -593,7 +655,7 @@ app.post(
     if (!codigo || !nombre || !VALID_UNITS.includes(unidad) || stockMinimo === null || costoRef === null) {
       return res.status(400).json({ error: 'Verifica código, nombre, unidad, mínimo y costo' });
     }
-    if (!VALID_CATEGORIES.includes(categoria)) {
+    if (!categoria) {
       return res.status(400).json({ error: 'Categoría inválida' });
     }
     if (tipoEnvase && !VALID_ENVASES.includes(tipoEnvase)) {
@@ -607,6 +669,8 @@ app.post(
     if (dup) {
       return res.status(409).json({ error: `Ya existe un producto activo con el código ${codigo}` });
     }
+
+    await repo.ensureCategoria(EMPRESA_ID, categoria);
 
     const prod = await repo.insertProducto({
       empresa_id: EMPRESA_ID,
@@ -725,6 +789,8 @@ app.patch(
     if (!nombre || !VALID_UNITS.includes(unidad) || stockMinimo === null || costoRef === null) {
       return res.status(400).json({ error: 'Datos de producto inválidos' });
     }
+
+    await repo.ensureCategoria(EMPRESA_ID, categoria);
 
     const patch: Partial<Omit<DbProducto, 'id' | 'empresa_id' | 'codigo'>> = {
       nombre,
@@ -897,14 +963,16 @@ app.get(
     header.font = { bold: true, color: { argb: 'FFFFFFFF' } };
     header.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF0F172A' } };
 
+    const snapCats = await repo.getSnapshot(EMPRESA_ID);
+    const allCats = Array.from(new Set([...VALID_CATEGORIES, ...snapCats.categorias.map((c) => c.nombre)]));
     const guide = wb.addWorksheet('Categorias_Validas');
     guide.columns = [
-      { key: 'cat', header: 'Categorias Permitidas', width: 24 },
+      { key: 'cat', header: 'Categorias Sugeridas (o personalizada)', width: 34 },
       { key: 'uni', header: 'Unidades Permitidas', width: 22 },
     ];
-    for (let i = 0; i < Math.max(VALID_CATEGORIES.length, VALID_UNITS.length); i++) {
+    for (let i = 0; i < Math.max(allCats.length, VALID_UNITS.length); i++) {
       guide.addRow({
-        cat: VALID_CATEGORIES[i] || '',
+        cat: allCats[i] || '',
         uni: VALID_UNITS[i] || '',
       });
     }
@@ -1032,6 +1100,7 @@ app.post(
         .trim()
         .toUpperCase();
       const categoria = normalizeCategory(getVal('categoria', 'familia', 'rubro'));
+      await repo.ensureCategoria(EMPRESA_ID, categoria);
       const unidadRaw = String(getVal('unidad', 'uom') || 'botella').trim();
       const unidad = VALID_UNITS.includes(unidadRaw) ? unidadRaw : 'unidad';
       const stockCentral = nnonneg(getVal('stock_inicial_central', 'stock_central', 'central') ?? 0) ?? 0;
@@ -1832,36 +1901,158 @@ app.delete(
 );
 
 // ============================================================================
-// MAESTRO DE INSUMOS (CON FICHAS DE PROVEEDORES)
+// CATEGORÍAS DINÁMICAS (PARA TODOS LOS ÍTEMS)
 // ============================================================================
 
 app.post(
-  '/api/insumos',
+  '/api/categorias',
+  auth,
+  wrap(async (req, res) => {
+    if (req.user!.rol !== 'Gerencia') {
+      const snap = await repo.getSnapshot(EMPRESA_ID);
+      if (!snap.insumoControl?.permitir_crear_items_bar) {
+        return res.status(403).json({
+          error: 'Solo Gerencia puede crear nuevas categorías (restringido por política de control)',
+        });
+      }
+    }
+    const nombre = String(req.body?.nombre || '').trim();
+    if (!nombre || nombre.length < 2) {
+      return res.status(400).json({ error: 'Ingresa un nombre válido para la categoría' });
+    }
+    const cat = await repo.ensureCategoria(EMPRESA_ID, nombre);
+    res.json({ ok: true, categoria: cat });
+  })
+);
+
+app.patch(
+  '/api/categorias',
+  auth,
+  wrap(async (req, res) => {
+    if (req.user!.rol !== 'Gerencia') {
+      const snap = await repo.getSnapshot(EMPRESA_ID);
+      if (!snap.insumoControl?.permitir_crear_items_bar) {
+        return res.status(403).json({
+          error: 'Solo Gerencia puede renombrar categorías (restringido por política de control)',
+        });
+      }
+    }
+    const oldNombre = String(req.body?.oldNombre || '').trim();
+    const newNombre = String(req.body?.newNombre || '').trim();
+    if (!oldNombre || !newNombre || newNombre.length < 2) {
+      return res.status(400).json({ error: 'Indica el nombre actual y el nuevo nombre de la categoría' });
+    }
+    await repo.renameCategoria(EMPRESA_ID, oldNombre, newNombre);
+    await repo.ensureCategoria(EMPRESA_ID, newNombre);
+    res.json({ ok: true });
+  })
+);
+
+app.delete(
+  '/api/categorias/:nombre',
+  auth,
+  adminOnly,
+  wrap(async (req, res) => {
+    const nombre = decodeURIComponent(String(req.params.nombre || '')).trim();
+    if (!nombre) return res.status(400).json({ error: 'Nombre inválido' });
+    await repo.deleteCategoria(EMPRESA_ID, nombre);
+    res.json({ ok: true });
+  })
+);
+
+// ============================================================================
+// MAESTRO DE INSUMOS, LÍMITES DE CONTROL Y SOLICITUDES
+// ============================================================================
+
+app.put(
+  '/api/insumos/control',
   auth,
   adminOnly,
   wrap(async (req, res) => {
     const b = req.body || {};
-    const codigo = String(b.codigo || '').trim().toUpperCase();
+    const maxItemsRaw = b.max_items_por_solicitud;
+    const maxItems =
+      maxItemsRaw === null || maxItemsRaw === undefined || String(maxItemsRaw).trim() === ''
+        ? null
+        : npos(maxItemsRaw);
+    if (maxItemsRaw !== null && maxItemsRaw !== undefined && String(maxItemsRaw).trim() !== '' && (!maxItems || !Number.isInteger(maxItems))) {
+      return res.status(400).json({ error: 'El máximo de líneas por solicitud debe ser un número entero mayor a 0' });
+    }
+
+    const catsPermitidas = Array.isArray(b.categorias_permitidas_bar)
+      ? b.categorias_permitidas_bar.map((c: unknown) => String(c || '').trim()).filter(Boolean)
+      : [];
+    const criteriosPermitidos = Array.isArray(b.criterios_permitidos_bar)
+      ? b.criterios_permitidos_bar.map((c: unknown) => String(c || '').trim()).filter(Boolean)
+      : [];
+
+    const saved = await repo.saveInsumoControl(EMPRESA_ID, {
+      permitir_crear_items_bar: Boolean(b.permitir_crear_items_bar),
+      restringir_categorias_bar: Boolean(b.restringir_categorias_bar),
+      categorias_permitidas_bar: catsPermitidas,
+      solo_bajo_minimo: Boolean(b.solo_bajo_minimo),
+      bloquear_duplicados_pendientes: Boolean(b.bloquear_duplicados_pendientes),
+      max_items_por_solicitud: maxItems,
+      permitir_criterio_personalizado_bar: Boolean(b.permitir_criterio_personalizado_bar),
+      criterios_permitidos_bar: criteriosPermitidos,
+    });
+
+    res.json({ ok: true, insumoControl: saved });
+  })
+);
+
+app.post(
+  '/api/insumos',
+  auth,
+  wrap(async (req, res) => {
+    if (req.user!.rol !== 'Gerencia') {
+      const snap = await repo.getSnapshot(EMPRESA_ID);
+      if (!snap.insumoControl?.permitir_crear_items_bar) {
+        return res.status(403).json({
+          error: 'Solo Gerencia puede incorporar nuevos ítems al maestro (control activo)',
+        });
+      }
+    }
+
+    const b = req.body || {};
+    const rawCodigo = String(b.codigo || '').trim().toUpperCase();
+    const codigo = rawCodigo || `INS-${String(Date.now()).slice(-5)}`;
     const nombre = String(b.nombre || '').trim().toUpperCase();
+    const categoria = normalizeCategory(b.categoria, 'Insumos de Barra');
+    const criterio = b.criterio ? String(b.criterio).trim() : null;
     const unidad = String(b.unidad || 'unidad').trim();
     const stockActual = nnonneg(b.stock_actual ?? 0);
     const stockMinimo = nnonneg(b.stock_minimo ?? 0);
-    const costoUnitario = nnonneg(b.costo_unitario ?? 0);
+    const costoUnitario = req.user!.rol === 'Gerencia' ? (nnonneg(b.costo_unitario ?? 0) ?? 0) : 0;
     const proveedorId = b.proveedor_id ? Number(b.proveedor_id) : null;
+    const solicitablePorBar =
+      req.user!.rol === 'Gerencia' && b.solicitable_por_bar !== undefined
+        ? Boolean(b.solicitable_por_bar)
+        : true;
+    const maxPorSolicitud =
+      req.user!.rol === 'Gerencia' && b.max_por_solicitud !== undefined && b.max_por_solicitud !== null && String(b.max_por_solicitud).trim() !== ''
+        ? npos(b.max_por_solicitud)
+        : null;
 
-    if (!codigo || !nombre || stockActual === null || stockMinimo === null || costoUnitario === null) {
-      return res.status(400).json({ error: 'Verifica los datos del insumo' });
+    if (!nombre || stockActual === null || stockMinimo === null) {
+      return res.status(400).json({ error: 'Verifica nombre, stock inicial y stock mínimo del ítem' });
     }
+
+    await repo.ensureCategoria(EMPRESA_ID, categoria);
 
     const ins = await repo.insertInsumo({
       empresa_id: EMPRESA_ID,
       codigo,
       nombre,
+      categoria,
+      criterio,
       unidad,
       stock_actual: stockActual,
       stock_minimo: stockMinimo,
       costo_unitario: costoUnitario,
       proveedor_id: proveedorId,
+      solicitable_por_bar: solicitablePorBar,
+      max_por_solicitud: maxPorSolicitud,
       notas: b.notas ? String(b.notas).trim() : null,
       activo: true,
     });
@@ -1872,29 +2063,93 @@ app.post(
 app.patch(
   '/api/insumos/:id',
   auth,
-  adminOnly,
   wrap(async (req, res) => {
     const id = Number(req.params.id);
     if (!Number.isInteger(id) || id < 1) return res.status(400).json({ error: 'ID inválido' });
-    const b = req.body || {};
-    const nombre = String(b.nombre || '').trim().toUpperCase();
-    const unidad = String(b.unidad || 'unidad').trim();
-    const stockMinimo = nnonneg(b.stock_minimo ?? 0);
-    const costoUnitario = nnonneg(b.costo_unitario ?? 0);
-    const proveedorId = b.proveedor_id ? Number(b.proveedor_id) : null;
+    const existing = await repo.findInsumoById(EMPRESA_ID, id);
+    if (!existing) return res.status(404).json({ error: 'Ítem no encontrado' });
 
-    if (!nombre || stockMinimo === null || costoUnitario === null) {
+    if (req.user!.rol !== 'Gerencia') {
+      const snap = await repo.getSnapshot(EMPRESA_ID);
+      if (!snap.insumoControl?.permitir_crear_items_bar) {
+        return res.status(403).json({
+          error: 'Solo Gerencia puede editar o mover ítems del maestro (control activo)',
+        });
+      }
+    }
+
+    const b = req.body || {};
+    const nombre = b.nombre !== undefined ? String(b.nombre).trim().toUpperCase() : existing.nombre;
+    const categoria =
+      b.categoria !== undefined
+        ? normalizeCategory(b.categoria, 'Insumos de Barra')
+        : existing.categoria || 'Insumos de Barra';
+    const criterio = b.criterio !== undefined ? (b.criterio ? String(b.criterio).trim() : null) : existing.criterio ?? null;
+    const unidad = b.unidad !== undefined ? String(b.unidad).trim() : existing.unidad;
+    const stockActual = b.stock_actual !== undefined ? nnonneg(b.stock_actual) : existing.stock_actual;
+    const stockMinimo = b.stock_minimo !== undefined ? nnonneg(b.stock_minimo) : existing.stock_minimo;
+    const costoUnitario =
+      req.user!.rol === 'Gerencia' && b.costo_unitario !== undefined
+        ? nnonneg(b.costo_unitario)
+        : existing.costo_unitario;
+    const proveedorId =
+      b.proveedor_id !== undefined ? (b.proveedor_id ? Number(b.proveedor_id) : null) : existing.proveedor_id;
+    const solicitablePorBar =
+      req.user!.rol === 'Gerencia' && b.solicitable_por_bar !== undefined
+        ? Boolean(b.solicitable_por_bar)
+        : (existing.solicitable_por_bar ?? true);
+    let maxPorSolicitud = existing.max_por_solicitud ?? null;
+    if (req.user!.rol === 'Gerencia' && b.max_por_solicitud !== undefined) {
+      if (b.max_por_solicitud === null || String(b.max_por_solicitud).trim() === '') {
+        maxPorSolicitud = null;
+      } else {
+        const parsedMax = npos(b.max_por_solicitud);
+        if (!parsedMax) return res.status(400).json({ error: 'El límite máximo por solicitud debe ser mayor a 0' });
+        maxPorSolicitud = parsedMax;
+      }
+    }
+    const notas = b.notas !== undefined ? (b.notas ? String(b.notas).trim() : null) : existing.notas;
+
+    if (!nombre || !unidad || stockActual === null || stockMinimo === null || costoUnitario === null) {
       return res.status(400).json({ error: 'Datos inválidos' });
     }
+
+    await repo.ensureCategoria(EMPRESA_ID, categoria);
+
     const ok = await repo.updateInsumo(id, EMPRESA_ID, {
       nombre,
+      categoria,
+      criterio,
       unidad,
+      stock_actual: stockActual,
       stock_minimo: stockMinimo,
       costo_unitario: costoUnitario,
       proveedor_id: proveedorId,
-      notas: b.notas ? String(b.notas).trim() : null,
+      solicitable_por_bar: solicitablePorBar,
+      max_por_solicitud: maxPorSolicitud,
+      notas,
     });
-    if (!ok) return res.status(404).json({ error: 'Insumo no encontrado' });
+    if (!ok) return res.status(404).json({ error: 'Ítem no encontrado' });
+    res.json({ ok: true });
+  })
+);
+
+app.delete(
+  '/api/insumos/:id',
+  auth,
+  wrap(async (req, res) => {
+    if (req.user!.rol !== 'Gerencia') {
+      const snap = await repo.getSnapshot(EMPRESA_ID);
+      if (!snap.insumoControl?.permitir_crear_items_bar) {
+        return res.status(403).json({
+          error: 'Solo Gerencia puede eliminar ítems del maestro (control activo)',
+        });
+      }
+    }
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id) || id < 1) return res.status(400).json({ error: 'ID inválido' });
+    const ok = await repo.updateInsumo(id, EMPRESA_ID, { activo: false });
+    if (!ok) return res.status(404).json({ error: 'Ítem no encontrado' });
     res.json({ ok: true });
   })
 );
@@ -1923,6 +2178,151 @@ app.post(
 
     await repo.updateInsumo(id, EMPRESA_ID, { stock_actual: nuevoStock });
     res.json({ ok: true, stock_actual: nuevoStock });
+  })
+);
+
+app.post(
+  '/api/insumos/solicitudes',
+  auth,
+  wrap(async (req, res) => {
+    const rawItems = Array.isArray(req.body?.items) ? req.body.items : [];
+    const fallbackProvId = req.body?.proveedor_id ? Number(req.body.proveedor_id) : null;
+    const fallbackObs = req.body?.observacion ? String(req.body.observacion).trim() : null;
+    if (rawItems.length === 0) {
+      return res.status(400).json({ error: 'Agrega al menos un ítem con cantidad a solicitar' });
+    }
+
+    const isGerencia = req.user!.rol === 'Gerencia';
+    const snap = await repo.getSnapshot(EMPRESA_ID);
+    const ctrl = snap.insumoControl || { empresa_id: EMPRESA_ID, ...DEFAULT_INSUMO_CONTROL };
+    const insById = new Map(snap.insumos.map((i) => [i.id, i]));
+    const pendingInsumoIds = new Set(
+      (snap.solicitudesInsumos || [])
+        .filter((s) => s.estado === 'Pendiente' && s.insumo_id != null)
+        .map((s) => s.insumo_id as number)
+    );
+    const allowedCatsLower = new Set(
+      (ctrl.categorias_permitidas_bar || []).map((c) => c.trim().toLowerCase())
+    );
+    const allowedCriteriosLower = new Set(
+      (ctrl.criterios_permitidos_bar || []).map((c) => c.trim().toLowerCase())
+    );
+
+    if (!isGerencia && ctrl.max_items_por_solicitud != null && rawItems.length > ctrl.max_items_por_solicitud) {
+      return res.status(403).json({
+        error: `Gerencia limitó las solicitudes de Barra a un máximo de ${ctrl.max_items_por_solicitud} ítems por envío`,
+      });
+    }
+
+    const validatedToInsert: Array<Parameters<typeof repo.insertSolicitudInsumo>[0]> = [];
+
+    for (const item of rawItems) {
+      const insumoId = item.insumo_id ? Number(item.insumo_id) : null;
+      const ins = insumoId ? insById.get(insumoId) || (await repo.findInsumoById(EMPRESA_ID, insumoId)) : null;
+      const nombreItem = String(item.nombre_item || ins?.nombre || '').trim().toUpperCase();
+      const categoria = normalizeCategory(item.categoria || ins?.categoria || 'Insumos de Barra', 'Insumos de Barra');
+      const unidad = String(item.unidad || ins?.unidad || 'unidad').trim();
+      const cantidadSolicitada = npos(item.cantidad_solicitada ?? item.cantidad);
+      const criterio = String(item.criterio || ins?.criterio || 'Reposición bajo mínimo').trim();
+      const proveedorId = item.proveedor_id ? Number(item.proveedor_id) : (ins?.proveedor_id ?? fallbackProvId);
+
+      if (!nombreItem || !cantidadSolicitada) continue;
+
+      if (!isGerencia) {
+        if (!ins) {
+          return res.status(403).json({
+            error: 'Solo puedes solicitar ítems habilitados en el maestro de Gerencia',
+          });
+        }
+        if (ins.solicitable_por_bar === false) {
+          return res.status(403).json({
+            error: `El ítem "${ins.nombre}" está bloqueado por Gerencia para solicitudes de Barra`,
+          });
+        }
+        if (ctrl.restringir_categorias_bar && !allowedCatsLower.has(categoria.toLowerCase())) {
+          return res.status(403).json({
+            error: `La categoría "${categoria}" está restringida por Gerencia para solicitudes de Barra`,
+          });
+        }
+        if (ctrl.solo_bajo_minimo && Number(ins.stock_actual || 0) >= Number(ins.stock_minimo || 0)) {
+          return res.status(403).json({
+            error: `Gerencia solo autoriza solicitar ítems bajo mínimo (${ins.nombre} tiene stock suficiente)`,
+          });
+        }
+        if (ctrl.bloquear_duplicados_pendientes && pendingInsumoIds.has(ins.id)) {
+          return res.status(403).json({
+            error: `Ya existe una solicitud pendiente para "${ins.nombre}". Espera aprobación de Gerencia`,
+          });
+        }
+        if (ins.max_por_solicitud != null && ins.max_por_solicitud > 0 && cantidadSolicitada > ins.max_por_solicitud) {
+          return res.status(403).json({
+            error: `La cantidad solicitada de "${ins.nombre}" (${cantidadSolicitada}) supera el máximo de ${ins.max_por_solicitud} ${ins.unidad} autorizado por Gerencia`,
+          });
+        }
+        if (!ctrl.permitir_criterio_personalizado_bar && allowedCriteriosLower.size > 0 && !allowedCriteriosLower.has(criterio.toLowerCase())) {
+          return res.status(403).json({
+            error: `El criterio "${criterio}" no está dentro de los criterios autorizados por Gerencia`,
+          });
+        }
+      }
+
+      validatedToInsert.push({
+        empresa_id: EMPRESA_ID,
+        fecha: nowISO(),
+        insumo_id: ins?.id ?? null,
+        nombre_item: nombreItem,
+        categoria,
+        unidad,
+        cantidad_solicitada: cantidadSolicitada,
+        criterio,
+        proveedor_id: proveedorId,
+        estado: 'Pendiente',
+        solicitante: req.user!.email,
+        observacion: item.observacion ? String(item.observacion).trim() : fallbackObs,
+      });
+    }
+
+    if (validatedToInsert.length === 0) {
+      return res.status(400).json({ error: 'No se encontraron ítems válidos con cantidad mayor a 0' });
+    }
+
+    for (const row of validatedToInsert) {
+      await repo.insertSolicitudInsumo(row);
+    }
+
+    res.json({ ok: true, creados: validatedToInsert.length });
+  })
+);
+
+app.patch(
+  '/api/insumos/solicitudes/:id',
+  auth,
+  adminOnly,
+  wrap(async (req, res) => {
+    const id = Number(req.params.id);
+    const estado = String(req.body?.estado || '');
+    if (!Number.isInteger(id) || id < 1 || !['Pendiente', 'Aprobada', 'Comprada', 'Rechazada'].includes(estado)) {
+      return res.status(400).json({ error: 'Estado de solicitud inválido' });
+    }
+    const patch: Partial<{
+      estado: 'Pendiente' | 'Aprobada' | 'Comprada' | 'Rechazada';
+      cantidad_solicitada: number;
+      observacion: string | null;
+    }> = {
+      estado: estado as 'Pendiente' | 'Aprobada' | 'Comprada' | 'Rechazada',
+    };
+    if (req.body?.cantidad_solicitada !== undefined) {
+      const qty = npos(req.body.cantidad_solicitada);
+      if (!qty) return res.status(400).json({ error: 'Cantidad ajustada inválida' });
+      patch.cantidad_solicitada = qty;
+    }
+    if (req.body?.observacion !== undefined) {
+      patch.observacion = req.body.observacion ? String(req.body.observacion).trim() : null;
+    }
+
+    const ok = await repo.updateSolicitudInsumo(id, EMPRESA_ID, patch);
+    if (!ok) return res.status(404).json({ error: 'Solicitud no encontrada' });
+    res.json({ ok: true });
   })
 );
 

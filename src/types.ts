@@ -11,7 +11,21 @@ export const PRODUCT_CATEGORIES = [
   'Jugos',
 ] as const;
 
-export type ProductCategory = (typeof PRODUCT_CATEGORIES)[number];
+export const DEFAULT_ALL_CATEGORIES = [
+  'Whisky',
+  'Piscos',
+  'Cervezas',
+  'Otros Licores',
+  'Gaseosas',
+  'Jugos',
+  'Licores',
+  'Verduras',
+  'Vajilla',
+  'Insumos de Barra',
+  'Descartables',
+] as const;
+
+export type ProductCategory = string;
 
 export interface AuthSession {
   token: string;
@@ -125,6 +139,8 @@ export interface Insumo {
   id: number;
   codigo: string;
   nombre: string;
+  categoria: string;
+  criterio: string | null;
   unidad: string;
   stock_actual: number;
   stock_minimo: number;
@@ -132,7 +148,37 @@ export interface Insumo {
   proveedor_id: number | null;
   proveedor_nombre?: string | null;
   proveedor_wsp?: string | null;
+  solicitable_por_bar: boolean;
+  max_por_solicitud: number | null;
   notas: string | null;
+}
+
+export interface InsumoControlConfig {
+  permitir_crear_items_bar: boolean;
+  restringir_categorias_bar: boolean;
+  categorias_permitidas_bar: string[];
+  solo_bajo_minimo: boolean;
+  bloquear_duplicados_pendientes: boolean;
+  max_items_por_solicitud: number | null;
+  permitir_criterio_personalizado_bar: boolean;
+  criterios_permitidos_bar: string[];
+}
+
+export interface SolicitudInsumo {
+  id: number;
+  fecha: string;
+  insumo_id: number | null;
+  nombre_item: string;
+  categoria: string;
+  unidad: string;
+  cantidad_solicitada: number;
+  criterio: string;
+  proveedor_id: number | null;
+  proveedor_nombre?: string | null;
+  proveedor_wsp?: string | null;
+  estado: 'Pendiente' | 'Aprobada' | 'Comprada' | 'Rechazada';
+  solicitante: string;
+  observacion: string | null;
 }
 
 export interface RecetaIngrediente {
@@ -207,6 +253,7 @@ export interface ConsumoTurnoReceta {
 export interface EstadoApp {
   rol: UserRole;
   email: string;
+  categorias: string[];
   productos: Producto[];
   solicitudes: Solicitud[];
   movimientos: Movimiento[];
@@ -214,6 +261,8 @@ export interface EstadoApp {
   lotes: Lote[];
   proveedores: Proveedor[];
   insumos: Insumo[];
+  insumoControl: InsumoControlConfig;
+  solicitudesInsumos: SolicitudInsumo[];
   recetas: Receta[];
   consumosTurno: ConsumoTurnoReceta[];
   vasos: Vaso[];

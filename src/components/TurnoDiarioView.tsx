@@ -91,6 +91,24 @@ export const TurnoDiarioView: React.FC<TurnoDiarioViewProps> = ({
     }
   }, [preselectedProducto, estado.productos]);
 
+  const dynamicCategories = useMemo(() => {
+    const ordered: string[] = [];
+    const seen = new Set<string>();
+    const add = (cat: string) => {
+      const clean = cat.trim();
+      if (!clean) return;
+      const key = clean.toLowerCase();
+      if (!seen.has(key)) {
+        seen.add(key);
+        ordered.push(clean);
+      }
+    };
+    for (const c of PRODUCT_CATEGORIES) add(c);
+    for (const c of estado.categorias || []) add(c);
+    for (const p of estado.productos) add(p.categoria);
+    return ordered;
+  }, [estado.productos, estado.categorias]);
+
   const filteredPlanillaProds = useMemo(() => {
     const q = planillaSearch.trim().toLowerCase();
     return estado.productos.filter((p) => {
@@ -450,7 +468,7 @@ export const TurnoDiarioView: React.FC<TurnoDiarioViewProps> = ({
                   className="w-full px-3 py-2 text-xs border border-slate-300 rounded-lg bg-white"
                 >
                   <option value="Todas">Todas las categorías</option>
-                  {PRODUCT_CATEGORIES.map((c) => (
+                  {dynamicCategories.map((c) => (
                     <option key={c} value={c}>
                       {c}
                     </option>
@@ -740,7 +758,7 @@ export const TurnoDiarioView: React.FC<TurnoDiarioViewProps> = ({
                   >
                     <option value="Licores">Destilados y Licores</option>
                     <option value="Todas">Todas las categorías</option>
-                    {PRODUCT_CATEGORIES.map((c) => (
+                    {dynamicCategories.map((c) => (
                       <option key={c} value={c}>
                         {c}
                       </option>

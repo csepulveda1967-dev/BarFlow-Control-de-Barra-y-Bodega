@@ -96,19 +96,87 @@ export interface DbProveedor {
   activo: boolean;
 }
 
+export interface DbCategoria {
+  id: number;
+  empresa_id: number;
+  nombre: string;
+  activo: boolean;
+}
+
 export interface DbInsumo {
   id: number;
   empresa_id: number;
   codigo: string;
   nombre: string;
+  categoria?: string;
+  criterio?: string | null;
   unidad: string;
   stock_actual: number;
   stock_minimo: number;
   costo_unitario: number;
   proveedor_id: number | null;
+  solicitable_por_bar?: boolean;
+  max_por_solicitud?: number | null;
   notas: string | null;
   activo: boolean;
 }
+
+export interface DbInsumoControl {
+  empresa_id: number;
+  permitir_crear_items_bar: boolean;
+  restringir_categorias_bar: boolean;
+  categorias_permitidas_bar: string[];
+  solo_bajo_minimo: boolean;
+  bloquear_duplicados_pendientes: boolean;
+  max_items_por_solicitud: number | null;
+  permitir_criterio_personalizado_bar: boolean;
+  criterios_permitidos_bar: string[];
+}
+
+export const DEFAULT_INSUMO_CONTROL: Omit<DbInsumoControl, 'empresa_id'> = {
+  permitir_crear_items_bar: false,
+  restringir_categorias_bar: false,
+  categorias_permitidas_bar: ['Insumos de Barra', 'Verduras', 'Descartables'],
+  solo_bajo_minimo: false,
+  bloquear_duplicados_pendientes: true,
+  max_items_por_solicitud: null,
+  permitir_criterio_personalizado_bar: false,
+  criterios_permitidos_bar: [
+    'Reposición bajo mínimo',
+    'Urgencia de turno',
+    'Rotura o reposición de vajilla',
+  ],
+};
+
+export interface DbSolicitudInsumo {
+  id: number;
+  empresa_id: number;
+  fecha: string;
+  insumo_id: number | null;
+  nombre_item: string;
+  categoria: string;
+  unidad: string;
+  cantidad_solicitada: number;
+  criterio: string;
+  proveedor_id: number | null;
+  estado: 'Pendiente' | 'Aprobada' | 'Comprada' | 'Rechazada';
+  solicitante: string;
+  observacion: string | null;
+}
+
+export const DEFAULT_SEED_CATEGORIES = [
+  'Whisky',
+  'Piscos',
+  'Cervezas',
+  'Otros Licores',
+  'Gaseosas',
+  'Jugos',
+  'Licores',
+  'Verduras',
+  'Vajilla',
+  'Insumos de Barra',
+  'Descartables',
+];
 
 export interface DbReceta {
   id: number;
@@ -214,6 +282,7 @@ function sortLotsFEFO(lots: DbLote[]): DbLote[] {
 }
 
 export interface DataSnapshot {
+  categorias: DbCategoria[];
   productos: DbProducto[];
   lotes: DbLote[];
   movimientos: DbMovimiento[];
@@ -221,6 +290,8 @@ export interface DataSnapshot {
   cierres: DbCierreTurno[];
   proveedores: DbProveedor[];
   insumos: DbInsumo[];
+  insumoControl: DbInsumoControl;
+  solicitudesInsumos: DbSolicitudInsumo[];
   recetas: DbReceta[];
   recetaIngredientes: DbRecetaIngrediente[];
   vasos: DbVaso[];
@@ -259,10 +330,18 @@ export interface DataRepository {
   insertProveedor(input: Omit<DbProveedor, 'id'>): Promise<DbProveedor>;
   updateProveedor(id: number, empresaId: number, patch: Partial<DbProveedor>): Promise<boolean>;
 
-  // Insumos
+  // Categorías dinámicas
+  ensureCategoria(empresaId: number, nombre: string): Promise<DbCategoria>;
+  renameCategoria(empresaId: number, oldNombre: string, newNombre: string): Promise<void>;
+  deleteCategoria(empresaId: number, nombre: string): Promise<boolean>;
+
+  // Insumos & Solicitudes de Insumos
   insertInsumo(input: Omit<DbInsumo, 'id'>): Promise<DbInsumo>;
   updateInsumo(id: number, empresaId: number, patch: Partial<DbInsumo>): Promise<boolean>;
   findInsumoById(empresaId: number, id: number): Promise<DbInsumo | null>;
+  saveInsumoControl(empresaId: number, config: Omit<DbInsumoControl, 'empresa_id'>): Promise<DbInsumoControl>;
+  insertSolicitudInsumo(input: Omit<DbSolicitudInsumo, 'id'>): Promise<DbSolicitudInsumo>;
+  updateSolicitudInsumo(id: number, empresaId: number, patch: Partial<DbSolicitudInsumo>): Promise<boolean>;
 
   // Recetas de Cócteles
   insertReceta(
@@ -289,6 +368,8 @@ export interface DataRepository {
 export class SupabaseRepository implements DataRepository {
   readonly mode = 'supabase' as const;
   private client: SupabaseClient;
+  private fallbackControl = new Map<number, DbInsumoControl>();
+  private fallbackInsumoLimits = new Map<number, { solicitable_por_bar?: boolean; max_por_solicitud?: number | null }>();
 
   constructor(url: string, serviceKey: string) {
     this.client = createClient(url, serviceKey, {
@@ -442,11 +523,17 @@ export class SupabaseRepository implements DataRepository {
       activo: true,
     });
 
-    // Seed Insumos vinculados a proveedores
+    for (const catNombre of DEFAULT_SEED_CATEGORIES) {
+      await this.ensureCategoria(empresaId, catNombre);
+    }
+
+    // Seed Insumos vinculados a proveedores y categorías dinámicas
     await this.insertInsumo({
       empresa_id: empresaId,
       codigo: 'INS-001',
       nombre: 'LIMÓN SUTIL FRESCO (MALLA)',
+      categoria: 'Verduras',
+      criterio: 'Reposición bajo mínimo',
       unidad: 'kg',
       stock_actual: 8,
       stock_minimo: 5,
@@ -459,6 +546,8 @@ export class SupabaseRepository implements DataRepository {
       empresa_id: empresaId,
       codigo: 'INS-002',
       nombre: 'HIELO EN CUBOS CRISTAL 5 KG',
+      categoria: 'Insumos de Barra',
+      criterio: 'Urgencia fin de semana',
       unidad: 'bolsa',
       stock_actual: 4,
       stock_minimo: 6,
@@ -471,6 +560,8 @@ export class SupabaseRepository implements DataRepository {
       empresa_id: empresaId,
       codigo: 'INS-003',
       nombre: 'JARABE DE GOMA / SIMPLE SYRUP 1 LT',
+      categoria: 'Licores',
+      criterio: 'Reposición de turno',
       unidad: 'botella',
       stock_actual: 5,
       stock_minimo: 3,
@@ -483,12 +574,42 @@ export class SupabaseRepository implements DataRepository {
       empresa_id: empresaId,
       codigo: 'INS-004',
       nombre: 'SERVILLETA CÓCTEL NEGRA (PAQ 100)',
+      categoria: 'Descartables',
+      criterio: 'Reposición bajo mínimo',
       unidad: 'paquete',
       stock_actual: 12,
       stock_minimo: 6,
       costo_unitario: 1100,
       proveedor_id: p3.id,
       notas: 'Servicio de barra y salón',
+      activo: true,
+    });
+    await this.insertInsumo({
+      empresa_id: empresaId,
+      codigo: 'INS-005',
+      nombre: 'MENTA FRESCA (ATADO)',
+      categoria: 'Verduras',
+      criterio: 'Evento / Fin de semana',
+      unidad: 'atado',
+      stock_actual: 3,
+      stock_minimo: 5,
+      costo_unitario: 950,
+      proveedor_id: p3.id,
+      notas: 'Para Mojitos y garnish',
+      activo: true,
+    });
+    await this.insertInsumo({
+      empresa_id: empresaId,
+      codigo: 'INS-006',
+      nombre: 'PLATILLOS Y BANDEJAS DE SERVICIO',
+      categoria: 'Vajilla',
+      criterio: 'Reposición por quiebre',
+      unidad: 'unidad',
+      stock_actual: 18,
+      stock_minimo: 12,
+      costo_unitario: 3500,
+      proveedor_id: p3.id,
+      notas: 'Vajilla de apoyo para barra y salón',
       activo: true,
     });
 
@@ -659,22 +780,41 @@ export class SupabaseRepository implements DataRepository {
       this.client.from('vasos_movimientos').select('*').eq('empresa_id', empresaId).order('id', { ascending: false }).limit(150),
     ]);
 
-    const consRes = await this.client
-      .from('consumos_turno')
-      .select('*')
-      .eq('empresa_id', empresaId)
-      .order('id', { ascending: false })
-      .limit(250);
+    const [consRes, catRes, solInsRes, ctrlRes] = await Promise.all([
+      this.client.from('consumos_turno').select('*').eq('empresa_id', empresaId).order('id', { ascending: false }).limit(250),
+      this.client.from('categorias').select('*').eq('empresa_id', empresaId).eq('activo', true).order('nombre', { ascending: true }),
+      this.client.from('insumo_solicitudes').select('*').eq('empresa_id', empresaId).order('id', { ascending: false }).limit(150),
+      this.client.from('insumo_control_config').select('*').eq('empresa_id', empresaId).maybeSingle(),
+    ]);
     const consumosTurno = consRes.error ? [] : ((consRes.data || []) as DbConsumoTurno[]);
+    const categorias = catRes.error ? [] : ((catRes.data || []) as DbCategoria[]);
+    const solicitudesInsumos = solInsRes.error ? [] : ((solInsRes.data || []) as DbSolicitudInsumo[]);
+    const insumoControl: DbInsumoControl =
+      !ctrlRes.error && ctrlRes.data
+        ? (ctrlRes.data as DbInsumoControl)
+        : this.fallbackControl.get(empresaId) || { empresa_id: empresaId, ...DEFAULT_INSUMO_CONTROL };
+
+    const rawInsumos = (this.assertOk(insRes, 'insumos') || []) as DbInsumo[];
+    const insumos = rawInsumos.map((ins) => {
+      const ov = this.fallbackInsumoLimits.get(ins.id);
+      return {
+        ...ins,
+        solicitable_por_bar: ov?.solicitable_por_bar ?? ins.solicitable_por_bar ?? true,
+        max_por_solicitud: ov?.max_por_solicitud !== undefined ? ov.max_por_solicitud : ins.max_por_solicitud ?? null,
+      };
+    });
 
     return {
+      categorias,
       productos: (this.assertOk(pRes, 'productos') || []) as DbProducto[],
       lotes: sortLotsFEFO((this.assertOk(lRes, 'lotes') || []) as DbLote[]),
       movimientos: (this.assertOk(mRes, 'movimientos') || []) as DbMovimiento[],
       solicitudes: (this.assertOk(sRes, 'solicitudes') || []) as DbSolicitud[],
       cierres: (this.assertOk(cRes, 'cierres') || []) as DbCierreTurno[],
       proveedores: (this.assertOk(provRes, 'proveedores') || []) as DbProveedor[],
-      insumos: (this.assertOk(insRes, 'insumos') || []) as DbInsumo[],
+      insumos,
+      insumoControl,
+      solicitudesInsumos,
       recetas: (this.assertOk(recRes, 'recetas') || []) as DbReceta[],
       recetaIngredientes: (this.assertOk(ingRes, 'recetaIngredientes') || []) as DbRecetaIngrediente[],
       vasos: (this.assertOk(vasRes, 'vasos') || []) as DbVaso[],
@@ -779,19 +919,121 @@ export class SupabaseRepository implements DataRepository {
     return ((this.assertOk(res, 'updateProveedor') as Array<{ id: number }>) || []).length > 0;
   }
 
+  async ensureCategoria(empresaId: number, nombre: string): Promise<DbCategoria> {
+    const clean = nombre.trim();
+    const existingRes = await this.client
+      .from('categorias')
+      .select('*')
+      .eq('empresa_id', empresaId)
+      .ilike('nombre', clean)
+      .limit(1);
+    if (!existingRes.error && existingRes.data && existingRes.data.length > 0) {
+      const row = existingRes.data[0] as DbCategoria;
+      if (!row.activo) {
+        await this.client.from('categorias').update({ activo: true, nombre: clean }).eq('id', row.id);
+      }
+      return { ...row, activo: true };
+    }
+    const res = await this.client
+      .from('categorias')
+      .insert({ empresa_id: empresaId, nombre: clean, activo: true })
+      .select('*')
+      .single();
+    if (res.error) {
+      return { id: Date.now(), empresa_id: empresaId, nombre: clean, activo: true };
+    }
+    return res.data as DbCategoria;
+  }
+
+  async renameCategoria(empresaId: number, oldNombre: string, newNombre: string): Promise<void> {
+    const cleanNew = newNombre.trim();
+    await this.client.from('categorias').update({ nombre: cleanNew }).eq('empresa_id', empresaId).eq('nombre', oldNombre);
+    await this.client.from('productos').update({ categoria: cleanNew }).eq('empresa_id', empresaId).eq('categoria', oldNombre);
+    await this.client.from('insumos').update({ categoria: cleanNew }).eq('empresa_id', empresaId).eq('categoria', oldNombre);
+  }
+
+  async deleteCategoria(empresaId: number, nombre: string): Promise<boolean> {
+    const res = await this.client
+      .from('categorias')
+      .update({ activo: false })
+      .eq('empresa_id', empresaId)
+      .eq('nombre', nombre)
+      .select('id');
+    return ((res.data as Array<{ id: number }>) || []).length > 0;
+  }
+
   async insertInsumo(input: Omit<DbInsumo, 'id'>): Promise<DbInsumo> {
-    const res = await this.client.from('insumos').insert(input).select('*').single();
+    let res = await this.client.from('insumos').insert(input).select('*').single();
+    if (res.error && res.error.message.includes('column')) {
+      const { solicitable_por_bar, max_por_solicitud, ...rest } = input;
+      res = await this.client.from('insumos').insert(rest).select('*').single();
+      const inserted = this.assertOk(res, 'insertInsumo') as DbInsumo;
+      if (solicitable_por_bar !== undefined || max_por_solicitud !== undefined) {
+        this.fallbackInsumoLimits.set(inserted.id, { solicitable_por_bar, max_por_solicitud });
+      }
+      return {
+        ...inserted,
+        solicitable_por_bar: solicitable_por_bar ?? true,
+        max_por_solicitud: max_por_solicitud ?? null,
+      };
+    }
     return this.assertOk(res, 'insertInsumo') as DbInsumo;
   }
 
   async updateInsumo(id: number, empresaId: number, patch: Partial<DbInsumo>): Promise<boolean> {
-    const res = await this.client.from('insumos').update(patch).eq('id', id).eq('empresa_id', empresaId).select('id');
+    let res = await this.client.from('insumos').update(patch).eq('id', id).eq('empresa_id', empresaId).select('id');
+    if (res.error && res.error.message.includes('column')) {
+      const { solicitable_por_bar, max_por_solicitud, ...rest } = patch;
+      const prevOv = this.fallbackInsumoLimits.get(id) || {};
+      this.fallbackInsumoLimits.set(id, {
+        solicitable_por_bar: solicitable_por_bar !== undefined ? solicitable_por_bar : prevOv.solicitable_por_bar,
+        max_por_solicitud: max_por_solicitud !== undefined ? max_por_solicitud : prevOv.max_por_solicitud,
+      });
+      if (Object.keys(rest).length === 0) return true;
+      res = await this.client.from('insumos').update(rest).eq('id', id).eq('empresa_id', empresaId).select('id');
+    }
     return ((this.assertOk(res, 'updateInsumo') as Array<{ id: number }>) || []).length > 0;
   }
 
   async findInsumoById(empresaId: number, id: number): Promise<DbInsumo | null> {
     const res = await this.client.from('insumos').select('*').eq('empresa_id', empresaId).eq('id', id).eq('activo', true).limit(1);
-    return ((this.assertOk(res, 'findInsumoById') as DbInsumo[]) || [])[0] || null;
+    const row = ((this.assertOk(res, 'findInsumoById') as DbInsumo[]) || [])[0] || null;
+    if (!row) return null;
+    const ov = this.fallbackInsumoLimits.get(row.id);
+    return {
+      ...row,
+      solicitable_por_bar: ov?.solicitable_por_bar ?? row.solicitable_por_bar ?? true,
+      max_por_solicitud: ov?.max_por_solicitud !== undefined ? ov.max_por_solicitud : row.max_por_solicitud ?? null,
+    };
+  }
+
+  async saveInsumoControl(empresaId: number, config: Omit<DbInsumoControl, 'empresa_id'>): Promise<DbInsumoControl> {
+    const full: DbInsumoControl = { empresa_id: empresaId, ...config };
+    this.fallbackControl.set(empresaId, full);
+    const res = await this.client
+      .from('insumo_control_config')
+      .upsert(full, { onConflict: 'empresa_id' })
+      .select('*')
+      .single();
+    if (res.error) {
+      return full;
+    }
+    return res.data as DbInsumoControl;
+  }
+
+  async insertSolicitudInsumo(input: Omit<DbSolicitudInsumo, 'id'>): Promise<DbSolicitudInsumo> {
+    const res = await this.client.from('insumo_solicitudes').insert(input).select('*').single();
+    return this.assertOk(res, 'insertSolicitudInsumo') as DbSolicitudInsumo;
+  }
+
+  async updateSolicitudInsumo(id: number, empresaId: number, patch: Partial<DbSolicitudInsumo>): Promise<boolean> {
+    const res = await this.client
+      .from('insumo_solicitudes')
+      .update(patch)
+      .eq('id', id)
+      .eq('empresa_id', empresaId)
+      .select('id');
+    return ((this.assertOk(res, 'updateSolicitudInsumo') as Array<{ id: number }>) || []).length > 0;
   }
 
   async insertReceta(
@@ -859,6 +1101,7 @@ export class SupabaseRepository implements DataRepository {
 // ============================================================================
 interface LocalStoreFile {
   nextId: number;
+  categorias: DbCategoria[];
   productos: DbProducto[];
   lotes: DbLote[];
   movimientos: DbMovimiento[];
@@ -866,6 +1109,8 @@ interface LocalStoreFile {
   cierres: DbCierreTurno[];
   proveedores: DbProveedor[];
   insumos: DbInsumo[];
+  insumoControl?: DbInsumoControl[];
+  solicitudesInsumos: DbSolicitudInsumo[];
   recetas: DbReceta[];
   recetaIngredientes: DbRecetaIngrediente[];
   vasos: DbVaso[];
@@ -884,6 +1129,7 @@ export class LocalJsonRepository implements DataRepository {
       const parsed = JSON.parse(fs.readFileSync(this.filePath, 'utf8')) as Partial<LocalStoreFile>;
       this.state = {
         nextId: parsed.nextId || 1,
+        categorias: parsed.categorias || [],
         productos: parsed.productos || [],
         lotes: parsed.lotes || [],
         movimientos: parsed.movimientos || [],
@@ -891,6 +1137,8 @@ export class LocalJsonRepository implements DataRepository {
         cierres: parsed.cierres || [],
         proveedores: parsed.proveedores || [],
         insumos: parsed.insumos || [],
+        insumoControl: parsed.insumoControl || [],
+        solicitudesInsumos: parsed.solicitudesInsumos || [],
         recetas: parsed.recetas || [],
         recetaIngredientes: parsed.recetaIngredientes || [],
         vasos: parsed.vasos || [],
@@ -900,6 +1148,7 @@ export class LocalJsonRepository implements DataRepository {
     } else {
       this.state = {
         nextId: 1,
+        categorias: [],
         productos: [],
         lotes: [],
         movimientos: [],
@@ -907,6 +1156,8 @@ export class LocalJsonRepository implements DataRepository {
         cierres: [],
         proveedores: [],
         insumos: [],
+        insumoControl: [],
+        solicitudesInsumos: [],
         recetas: [],
         recetaIngredientes: [],
         vasos: [],
@@ -1037,10 +1288,16 @@ export class LocalJsonRepository implements DataRepository {
       activo: true,
     });
 
+    for (const catNombre of DEFAULT_SEED_CATEGORIES) {
+      await this.ensureCategoria(empresaId, catNombre);
+    }
+
     await this.insertInsumo({
       empresa_id: empresaId,
       codigo: 'INS-001',
       nombre: 'LIMÓN SUTIL FRESCO (MALLA)',
+      categoria: 'Verduras',
+      criterio: 'Reposición bajo mínimo',
       unidad: 'kg',
       stock_actual: 8,
       stock_minimo: 5,
@@ -1053,6 +1310,8 @@ export class LocalJsonRepository implements DataRepository {
       empresa_id: empresaId,
       codigo: 'INS-002',
       nombre: 'HIELO EN CUBOS CRISTAL 5 KG',
+      categoria: 'Insumos de Barra',
+      criterio: 'Urgencia fin de semana',
       unidad: 'bolsa',
       stock_actual: 4,
       stock_minimo: 6,
@@ -1065,6 +1324,8 @@ export class LocalJsonRepository implements DataRepository {
       empresa_id: empresaId,
       codigo: 'INS-003',
       nombre: 'JARABE DE GOMA / SIMPLE SYRUP 1 LT',
+      categoria: 'Licores',
+      criterio: 'Reposición de turno',
       unidad: 'botella',
       stock_actual: 5,
       stock_minimo: 3,
@@ -1077,12 +1338,42 @@ export class LocalJsonRepository implements DataRepository {
       empresa_id: empresaId,
       codigo: 'INS-004',
       nombre: 'SERVILLETA CÓCTEL NEGRA (PAQ 100)',
+      categoria: 'Descartables',
+      criterio: 'Reposición bajo mínimo',
       unidad: 'paquete',
       stock_actual: 12,
       stock_minimo: 6,
       costo_unitario: 1100,
       proveedor_id: p3.id,
       notas: 'Servicio de barra y salón',
+      activo: true,
+    });
+    await this.insertInsumo({
+      empresa_id: empresaId,
+      codigo: 'INS-005',
+      nombre: 'MENTA FRESCA (ATADO)',
+      categoria: 'Verduras',
+      criterio: 'Evento / Fin de semana',
+      unidad: 'atado',
+      stock_actual: 3,
+      stock_minimo: 5,
+      costo_unitario: 950,
+      proveedor_id: p3.id,
+      notas: 'Para Mojitos y garnish',
+      activo: true,
+    });
+    await this.insertInsumo({
+      empresa_id: empresaId,
+      codigo: 'INS-006',
+      nombre: 'PLATILLOS Y BANDEJAS DE SERVICIO',
+      categoria: 'Vajilla',
+      criterio: 'Reposición por quiebre',
+      unidad: 'unidad',
+      stock_actual: 18,
+      stock_minimo: 12,
+      costo_unitario: 3500,
+      proveedor_id: p3.id,
+      notas: 'Vajilla de apoyo para barra y salón',
       activo: true,
     });
 
@@ -1235,6 +1526,9 @@ export class LocalJsonRepository implements DataRepository {
 
   async getSnapshot(empresaId: number): Promise<DataSnapshot> {
     return {
+      categorias: this.state.categorias
+        .filter((c) => c.empresa_id === empresaId && c.activo)
+        .sort((a, b) => a.nombre.localeCompare(b.nombre)),
       productos: this.state.productos
         .filter((p) => p.empresa_id === empresaId && p.activo)
         .sort((a, b) => a.nombre.localeCompare(b.nombre)),
@@ -1260,7 +1554,21 @@ export class LocalJsonRepository implements DataRepository {
         .sort((a, b) => a.nombre.localeCompare(b.nombre)),
       insumos: this.state.insumos
         .filter((i) => i.empresa_id === empresaId && i.activo)
+        .map((i) => ({
+          ...i,
+          solicitable_por_bar: i.solicitable_por_bar ?? true,
+          max_por_solicitud: i.max_por_solicitud ?? null,
+        }))
         .sort((a, b) => a.nombre.localeCompare(b.nombre)),
+      insumoControl:
+        (this.state.insumoControl || []).find((c) => c.empresa_id === empresaId) || {
+          empresa_id: empresaId,
+          ...DEFAULT_INSUMO_CONTROL,
+        },
+      solicitudesInsumos: [...this.state.solicitudesInsumos]
+        .filter((si) => si.empresa_id === empresaId)
+        .sort((a, b) => b.id - a.id)
+        .slice(0, 150),
       recetas: this.state.recetas
         .filter((r) => r.empresa_id === empresaId && r.activo)
         .sort((a, b) => a.nombre.localeCompare(b.nombre)),
@@ -1395,6 +1703,47 @@ export class LocalJsonRepository implements DataRepository {
     return true;
   }
 
+  async ensureCategoria(empresaId: number, nombre: string): Promise<DbCategoria> {
+    const clean = nombre.trim();
+    const existing = this.state.categorias.find(
+      (c) => c.empresa_id === empresaId && c.nombre.toLowerCase() === clean.toLowerCase()
+    );
+    if (existing) {
+      if (!existing.activo) {
+        existing.activo = true;
+        existing.nombre = clean;
+        this.persist();
+      }
+      return existing;
+    }
+    const row: DbCategoria = { id: this.nextSeq(), empresa_id: empresaId, nombre: clean, activo: true };
+    this.state.categorias.push(row);
+    this.persist();
+    return row;
+  }
+
+  async renameCategoria(empresaId: number, oldNombre: string, newNombre: string): Promise<void> {
+    const cleanNew = newNombre.trim();
+    for (const c of this.state.categorias) {
+      if (c.empresa_id === empresaId && c.nombre === oldNombre) c.nombre = cleanNew;
+    }
+    for (const p of this.state.productos) {
+      if (p.empresa_id === empresaId && p.categoria === oldNombre) p.categoria = cleanNew;
+    }
+    for (const ins of this.state.insumos) {
+      if (ins.empresa_id === empresaId && ins.categoria === oldNombre) ins.categoria = cleanNew;
+    }
+    this.persist();
+  }
+
+  async deleteCategoria(empresaId: number, nombre: string): Promise<boolean> {
+    const c = this.state.categorias.find((x) => x.empresa_id === empresaId && x.nombre === nombre && x.activo);
+    if (!c) return false;
+    c.activo = false;
+    this.persist();
+    return true;
+  }
+
   async insertInsumo(input: Omit<DbInsumo, 'id'>): Promise<DbInsumo> {
     const row: DbInsumo = { ...input, id: this.nextSeq() };
     this.state.insumos.push(row);
@@ -1411,7 +1760,41 @@ export class LocalJsonRepository implements DataRepository {
   }
 
   async findInsumoById(empresaId: number, id: number): Promise<DbInsumo | null> {
-    return this.state.insumos.find((i) => i.id === id && i.empresa_id === empresaId && i.activo) || null;
+    const found = this.state.insumos.find((i) => i.id === id && i.empresa_id === empresaId && i.activo);
+    if (!found) return null;
+    return {
+      ...found,
+      solicitable_por_bar: found.solicitable_por_bar ?? true,
+      max_por_solicitud: found.max_por_solicitud ?? null,
+    };
+  }
+
+  async saveInsumoControl(empresaId: number, config: Omit<DbInsumoControl, 'empresa_id'>): Promise<DbInsumoControl> {
+    if (!this.state.insumoControl) this.state.insumoControl = [];
+    const idx = this.state.insumoControl.findIndex((c) => c.empresa_id === empresaId);
+    const full: DbInsumoControl = { empresa_id: empresaId, ...config };
+    if (idx === -1) {
+      this.state.insumoControl.push(full);
+    } else {
+      this.state.insumoControl[idx] = full;
+    }
+    this.persist();
+    return full;
+  }
+
+  async insertSolicitudInsumo(input: Omit<DbSolicitudInsumo, 'id'>): Promise<DbSolicitudInsumo> {
+    const row: DbSolicitudInsumo = { ...input, id: this.nextSeq() };
+    this.state.solicitudesInsumos.push(row);
+    this.persist();
+    return row;
+  }
+
+  async updateSolicitudInsumo(id: number, empresaId: number, patch: Partial<DbSolicitudInsumo>): Promise<boolean> {
+    const idx = this.state.solicitudesInsumos.findIndex((s) => s.id === id && s.empresa_id === empresaId);
+    if (idx === -1) return false;
+    this.state.solicitudesInsumos[idx] = { ...this.state.solicitudesInsumos[idx], ...patch };
+    this.persist();
+    return true;
   }
 
   async insertReceta(

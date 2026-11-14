@@ -160,7 +160,7 @@ export default function App() {
     },
     {
       id: 'insumos',
-      label: 'Maestro Insumos',
+      label: 'Insumos y Solicitudes',
       icon: <Boxes className="w-4 h-4 shrink-0" />,
       badgeCount: estado?.kpis.insumosBajoMinimo || undefined,
     },
@@ -188,7 +188,7 @@ export default function App() {
     recepcion: 'Recepción de Despachos desde Bodega',
     cocteles: isGerencia ? 'Ficha de Costeo de Cócteles y Descuentos' : 'Recetas de Barra y Descuento de Stock',
     vasos: 'Maestro Independiente de Control de Vasos',
-    insumos: 'Maestro de Insumos con Ficha de Proveedores',
+    insumos: 'Insumos, Categorías y Solicitudes a Proveedores',
     proveedores: 'Proveedores y Pedidos Directos por WhatsApp',
     gerencia: 'Gerencia, Carga Masiva, Comparativa y Auditoría',
   };

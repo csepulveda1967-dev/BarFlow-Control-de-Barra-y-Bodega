@@ -20,15 +20,22 @@ export const InventarioView: React.FC<InventarioViewProps> = ({
   const [statusFilter, setStatusFilter] = useState<'all' | 'low' | 'zero'>('all');
 
   const categorias = useMemo(() => {
-    const existing = new Set(estado.productos.map((p) => p.categoria));
-    const ordered = PRODUCT_CATEGORIES.filter((c) => existing.has(c));
-    for (const c of existing) {
-      if (!ordered.includes(c as (typeof PRODUCT_CATEGORIES)[number])) {
-        ordered.push(c as (typeof PRODUCT_CATEGORIES)[number]);
+    const ordered: string[] = [];
+    const seen = new Set<string>();
+    const add = (cat: string) => {
+      const clean = cat.trim();
+      if (!clean) return;
+      const key = clean.toLowerCase();
+      if (!seen.has(key)) {
+        seen.add(key);
+        ordered.push(clean);
       }
-    }
+    };
+    for (const c of PRODUCT_CATEGORIES) add(c);
+    for (const c of estado.categorias || []) add(c);
+    for (const p of estado.productos) add(p.categoria);
     return ['Todas', ...ordered];
-  }, [estado.productos]);
+  }, [estado.productos, estado.categorias]);
 
   const alertasBar = useMemo(
     () => estado.productos.filter((p) => p.bar < p.stock_minimo),
@@ -129,7 +136,7 @@ export const InventarioView: React.FC<InventarioViewProps> = ({
           <p className="mt-2 text-2xl font-bold font-mono tabular-nums text-slate-900">
             {estado.kpis.totalProductos}
           </p>
-          <p className="mt-1 text-xs text-slate-500">6 categorías activas</p>
+          <p className="mt-1 text-xs text-slate-500">{Math.max(0, categorias.length - 1)} categorías activas</p>
         </div>
 
         <div className="bg-white border border-slate-200 rounded-xl p-5">

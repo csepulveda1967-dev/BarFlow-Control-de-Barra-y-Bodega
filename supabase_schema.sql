@@ -112,18 +112,60 @@ CREATE TABLE IF NOT EXISTS cierres_turno (
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+CREATE TABLE IF NOT EXISTS categorias (
+  id BIGSERIAL PRIMARY KEY,
+  empresa_id BIGINT NOT NULL DEFAULT 1 REFERENCES empresas(id),
+  nombre TEXT NOT NULL,
+  activo BOOLEAN NOT NULL DEFAULT TRUE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
 CREATE TABLE IF NOT EXISTS insumos (
   id BIGSERIAL PRIMARY KEY,
   empresa_id BIGINT NOT NULL DEFAULT 1 REFERENCES empresas(id),
   codigo TEXT NOT NULL,
   nombre TEXT NOT NULL,
+  categoria TEXT NOT NULL DEFAULT 'Insumos de Barra',
+  criterio TEXT,
   unidad TEXT NOT NULL DEFAULT 'kg',
   stock_actual DOUBLE PRECISION NOT NULL DEFAULT 0,
   stock_minimo DOUBLE PRECISION NOT NULL DEFAULT 0,
   costo_unitario DOUBLE PRECISION NOT NULL DEFAULT 0,
   proveedor_id BIGINT REFERENCES proveedores(id) ON DELETE SET NULL,
+  solicitable_por_bar BOOLEAN NOT NULL DEFAULT TRUE,
+  max_por_solicitud DOUBLE PRECISION,
   notas TEXT,
   activo BOOLEAN NOT NULL DEFAULT TRUE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS insumo_control_config (
+  empresa_id BIGINT PRIMARY KEY REFERENCES empresas(id),
+  permitir_crear_items_bar BOOLEAN NOT NULL DEFAULT FALSE,
+  restringir_categorias_bar BOOLEAN NOT NULL DEFAULT FALSE,
+  categorias_permitidas_bar TEXT[] NOT NULL DEFAULT ARRAY['Insumos de Barra', 'Verduras', 'Descartables'],
+  solo_bajo_minimo BOOLEAN NOT NULL DEFAULT FALSE,
+  bloquear_duplicados_pendientes BOOLEAN NOT NULL DEFAULT TRUE,
+  max_items_por_solicitud INTEGER,
+  permitir_criterio_personalizado_bar BOOLEAN NOT NULL DEFAULT FALSE,
+  criterios_permitidos_bar TEXT[] NOT NULL DEFAULT ARRAY['Reposición bajo mínimo', 'Urgencia de turno', 'Rotura o reposición de vajilla'],
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS insumo_solicitudes (
+  id BIGSERIAL PRIMARY KEY,
+  empresa_id BIGINT NOT NULL DEFAULT 1 REFERENCES empresas(id),
+  fecha TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  insumo_id BIGINT REFERENCES insumos(id) ON DELETE SET NULL,
+  nombre_item TEXT NOT NULL,
+  categoria TEXT NOT NULL DEFAULT 'Insumos de Barra',
+  unidad TEXT NOT NULL DEFAULT 'unidad',
+  cantidad_solicitada DOUBLE PRECISION NOT NULL,
+  criterio TEXT NOT NULL DEFAULT 'Reposición',
+  proveedor_id BIGINT REFERENCES proveedores(id) ON DELETE SET NULL,
+  estado TEXT NOT NULL DEFAULT 'Pendiente',
+  solicitante TEXT NOT NULL,
+  observacion TEXT,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
@@ -198,7 +240,9 @@ CREATE INDEX IF NOT EXISTS idx_lotes_fefo ON lotes (empresa_id, producto_id, bod
 CREATE INDEX IF NOT EXISTS idx_movimientos_empresa ON movimientos (empresa_id, bodega_id, id DESC);
 CREATE INDEX IF NOT EXISTS idx_solicitudes_empresa ON solicitudes (empresa_id, estado, id DESC);
 CREATE INDEX IF NOT EXISTS idx_cierres_empresa ON cierres_turno (empresa_id, fecha DESC, id DESC);
-CREATE INDEX IF NOT EXISTS idx_insumos_empresa ON insumos (empresa_id, activo);
+CREATE INDEX IF NOT EXISTS idx_categorias_empresa ON categorias (empresa_id, activo);
+CREATE INDEX IF NOT EXISTS idx_insumos_empresa ON insumos (empresa_id, activo, categoria);
+CREATE INDEX IF NOT EXISTS idx_insumo_solicitudes_empresa ON insumo_solicitudes (empresa_id, estado, id DESC);
 CREATE INDEX IF NOT EXISTS idx_recetas_empresa ON recetas (empresa_id, activo);
 CREATE INDEX IF NOT EXISTS idx_vasos_empresa ON vasos (empresa_id, activo);
 CREATE INDEX IF NOT EXISTS idx_consumos_turno_empresa ON consumos_turno (empresa_id, fecha DESC, turno, id DESC);
@@ -207,12 +251,15 @@ CREATE INDEX IF NOT EXISTS idx_consumos_turno_empresa ON consumos_turno (empresa
 ALTER TABLE empresas ENABLE ROW LEVEL SECURITY;
 ALTER TABLE bodegas ENABLE ROW LEVEL SECURITY;
 ALTER TABLE proveedores ENABLE ROW LEVEL SECURITY;
+ALTER TABLE categorias ENABLE ROW LEVEL SECURITY;
 ALTER TABLE productos ENABLE ROW LEVEL SECURITY;
 ALTER TABLE lotes ENABLE ROW LEVEL SECURITY;
 ALTER TABLE movimientos ENABLE ROW LEVEL SECURITY;
 ALTER TABLE solicitudes ENABLE ROW LEVEL SECURITY;
 ALTER TABLE cierres_turno ENABLE ROW LEVEL SECURITY;
 ALTER TABLE insumos ENABLE ROW LEVEL SECURITY;
+ALTER TABLE insumo_control_config ENABLE ROW LEVEL SECURITY;
+ALTER TABLE insumo_solicitudes ENABLE ROW LEVEL SECURITY;
 ALTER TABLE recetas ENABLE ROW LEVEL SECURITY;
 ALTER TABLE receta_ingredientes ENABLE ROW LEVEL SECURITY;
 ALTER TABLE vasos ENABLE ROW LEVEL SECURITY;

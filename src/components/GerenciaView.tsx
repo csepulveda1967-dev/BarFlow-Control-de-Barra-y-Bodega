@@ -57,6 +57,9 @@ export const GerenciaView: React.FC<GerenciaViewProps> = ({
   const [codigo, setCodigo] = useState('');
   const [nombre, setNombre] = useState('');
   const [categoria, setCategoria] = useState<string>(PRODUCT_CATEGORIES[0]);
+  const [showNewCatCreate, setShowNewCatCreate] = useState(false);
+  const [newCatCreateName, setNewCatCreateName] = useState('');
+  const [savingCat, setSavingCat] = useState(false);
   const [unidad, setUnidad] = useState('botella');
   const [minimo, setMinimo] = useState('');
   const [costoRef, setCostoRef] = useState('');
@@ -73,6 +76,8 @@ export const GerenciaView: React.FC<GerenciaViewProps> = ({
   const [editingProd, setEditingProd] = useState<Producto | null>(null);
   const [editNombre, setEditNombre] = useState('');
   const [editCategoria, setEditCategoria] = useState<string>(PRODUCT_CATEGORIES[0]);
+  const [showNewCatEdit, setShowNewCatEdit] = useState(false);
+  const [newCatEditName, setNewCatEditName] = useState('');
   const [editUnidad, setEditUnidad] = useState('botella');
   const [editMinimo, setEditMinimo] = useState('0');
   const [editCosto, setEditCosto] = useState('0');
@@ -117,6 +122,55 @@ export const GerenciaView: React.FC<GerenciaViewProps> = ({
   const [auditSearch, setAuditSearch] = useState('');
   const [auditTipo, setAuditTipo] = useState('Todos');
   const [exporting, setExporting] = useState(false);
+
+  const allCategories = useMemo(() => {
+    const ordered: string[] = [];
+    const seen = new Set<string>();
+    const add = (cat: string) => {
+      const clean = cat.trim();
+      if (!clean) return;
+      const key = clean.toLowerCase();
+      if (!seen.has(key)) {
+        seen.add(key);
+        ordered.push(clean);
+      }
+    };
+    for (const c of estado.categorias || []) add(c);
+    for (const c of PRODUCT_CATEGORIES) add(c);
+    for (const p of estado.productos) add(p.categoria);
+    return ordered;
+  }, [estado.categorias, estado.productos]);
+
+  const handleCrearCategoriaInline = async (target: 'create' | 'edit') => {
+    const raw = (target === 'create' ? newCatCreateName : newCatEditName).trim();
+    if (raw.length < 2) {
+      return onNotify('Ingresa un nombre válido de al menos 2 caracteres para la categoría', true);
+    }
+    setSavingCat(true);
+    try {
+      const res = await apiRequest<{ ok: boolean; categoria: { nombre: string } }>('/categorias', {
+        method: 'POST',
+        token,
+        body: { nombre: raw },
+      });
+      await onRefresh();
+      const createdName = res.categoria?.nombre || raw;
+      if (target === 'create') {
+        setCategoria(createdName);
+        setNewCatCreateName('');
+        setShowNewCatCreate(false);
+      } else {
+        setEditCategoria(createdName);
+        setNewCatEditName('');
+        setShowNewCatEdit(false);
+      }
+      onNotify(`Categoría "${createdName}" creada y seleccionada`);
+    } catch (err) {
+      onNotify(err instanceof Error ? err.message : 'Error creando categoría', true);
+    } finally {
+      setSavingCat(false);
+    }
+  };
 
   const pendientes = useMemo(
     () => estado.solicitudes.filter((s) => s.estado === 'Pendiente'),
@@ -951,7 +1005,7 @@ export const GerenciaView: React.FC<GerenciaViewProps> = ({
                 className="px-2.5 py-1.5 text-xs border border-slate-300 rounded-lg bg-white"
               >
                 <option value="Todas">Todas las categorías</option>
-                {PRODUCT_CATEGORIES.map((c) => (
+                {allCategories.map((c) => (
                   <option key={c} value={c}>
                     {c}
                   </option>
@@ -1127,18 +1181,47 @@ export const GerenciaView: React.FC<GerenciaViewProps> = ({
 
                 <div className="grid grid-cols-2 gap-3">
                   <div>
-                    <label className="block text-xs font-semibold text-slate-700 mb-1">Categoría</label>
-                    <select
-                      value={categoria}
-                      onChange={(e) => setCategoria(e.target.value)}
-                      className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg bg-white"
-                    >
-                      {PRODUCT_CATEGORIES.map((cat) => (
-                        <option key={cat} value={cat}>
-                          {cat}
-                        </option>
-                      ))}
-                    </select>
+                    <div className="flex items-center justify-between mb-1">
+                      <label className="block text-xs font-semibold text-slate-700">Categoría</label>
+                      <button
+                        type="button"
+                        onClick={() => setShowNewCatCreate((v) => !v)}
+                        className="text-[11px] font-semibold text-emerald-700 hover:text-emerald-800 cursor-pointer"
+                      >
+                        {showNewCatCreate ? 'Cancelar' : '+ Nueva categoría'}
+                      </button>
+                    </div>
+                    {showNewCatCreate ? (
+                      <div className="flex items-center gap-1.5">
+                        <input
+                          type="text"
+                          value={newCatCreateName}
+                          onChange={(e) => setNewCatCreateName(e.target.value)}
+                          placeholder="Ej. Verduras, Vajilla, Vinos..."
+                          className="w-full px-2.5 py-2 text-xs border border-slate-900 rounded-lg bg-white"
+                        />
+                        <button
+                          type="button"
+                          disabled={savingCat}
+                          onClick={() => handleCrearCategoriaInline('create')}
+                          className="px-2.5 py-2 text-xs font-semibold bg-emerald-700 hover:bg-emerald-800 text-white rounded-lg shrink-0 cursor-pointer"
+                        >
+                          Crear
+                        </button>
+                      </div>
+                    ) : (
+                      <select
+                        value={categoria}
+                        onChange={(e) => setCategoria(e.target.value)}
+                        className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg bg-white"
+                      >
+                        {allCategories.map((cat) => (
+                          <option key={cat} value={cat}>
+                            {cat}
+                          </option>
+                        ))}
+                      </select>
+                    )}
                   </div>
                   <div>
                     <label className="block text-xs font-semibold text-slate-700 mb-1">Unidad de Stock</label>
@@ -1762,7 +1845,7 @@ export const GerenciaView: React.FC<GerenciaViewProps> = ({
             </div>
 
             <p className="text-xs text-slate-600 leading-relaxed">
-              Ideal para clientes nuevos: descarga la plantilla oficial en Excel, completa tus productos, categorías (Whisky, Piscos, Cervezas, Otros Licores, Gaseosas, Jugos), valores y stock inicial manual, y cárgala aquí.
+              Ideal para clientes nuevos: descarga la plantilla oficial en Excel, completa tus productos, categorías (Whisky, Piscos, Cervezas, Otros Licores, Gaseosas, Jugos, Verduras, Vajilla o cualquier categoría propia), valores y stock inicial manual, y cárgala aquí.
             </p>
 
             <div className="p-3.5 bg-slate-50 border border-slate-200 rounded-lg flex items-center justify-between gap-3">
@@ -1932,18 +2015,47 @@ export const GerenciaView: React.FC<GerenciaViewProps> = ({
 
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-xs font-semibold text-slate-700 mb-1">Categoría</label>
-                  <select
-                    value={editCategoria}
-                    onChange={(e) => setEditCategoria(e.target.value)}
-                    className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg bg-white"
-                  >
-                    {PRODUCT_CATEGORIES.map((cat) => (
-                      <option key={cat} value={cat}>
-                        {cat}
-                      </option>
-                    ))}
-                  </select>
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="block text-xs font-semibold text-slate-700">Categoría</label>
+                    <button
+                      type="button"
+                      onClick={() => setShowNewCatEdit((v) => !v)}
+                      className="text-[11px] font-semibold text-emerald-700 hover:text-emerald-800 cursor-pointer"
+                    >
+                      {showNewCatEdit ? 'Cancelar' : '+ Nueva categoría'}
+                    </button>
+                  </div>
+                  {showNewCatEdit ? (
+                    <div className="flex items-center gap-1.5">
+                      <input
+                        type="text"
+                        value={newCatEditName}
+                        onChange={(e) => setNewCatEditName(e.target.value)}
+                        placeholder="Ej. Verduras, Vajilla..."
+                        className="w-full px-2.5 py-2 text-xs border border-slate-900 rounded-lg bg-white"
+                      />
+                      <button
+                        type="button"
+                        disabled={savingCat}
+                        onClick={() => handleCrearCategoriaInline('edit')}
+                        className="px-2.5 py-2 text-xs font-semibold bg-emerald-700 hover:bg-emerald-800 text-white rounded-lg shrink-0 cursor-pointer"
+                      >
+                        Crear
+                      </button>
+                    </div>
+                  ) : (
+                    <select
+                      value={editCategoria}
+                      onChange={(e) => setEditCategoria(e.target.value)}
+                      className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg bg-white"
+                    >
+                      {allCategories.map((cat) => (
+                        <option key={cat} value={cat}>
+                          {cat}
+                        </option>
+                      ))}
+                    </select>
+                  )}
                 </div>
                 <div>
                   <label className="block text-xs font-semibold text-slate-700 mb-1">Unidad</label>
